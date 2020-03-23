@@ -1,20 +1,18 @@
-= render "projects/project_head"
+- @hide_top_links = true
+- @content_class = "limit-container-width limited-inner-width-container" unless fluid_layout
+- add_to_breadcrumbs _("Snippets"), dashboard_snippets_path
+- breadcrumb_title @snippet.to_reference
+- page_title "#{@snippet.title} (#{@snippet.to_reference})", _("Snippets")
 
-%h3
-  = @snippet.title
-  %small= @snippet.file_name
-  - if can?(current_user, :admin_snippet, @project) || @snippet.author == current_user
-    = link_to "Edit", edit_project_snippet_path(@project, @snippet), class: "btn small right"
+- if Feature.enabled?(:snippets_vue)
+  #js-snippet-view{ data: {'qa-selector': 'snippet_view', 'snippet-gid': @snippet.to_global_id} }
+- else
+  = render 'shared/snippets/header'
 
-%br
-.file_holder
-  .file_title
-    %i.icon-file
-    %strong= @snippet.file_name
-    %span.options
-      = link_to "raw", raw_project_snippet_path(@project, @snippet), class: "btn very_small", target: "_blank"
-  .file_content.code
-    %div{class: current_user.dark_scheme ? "black" : ""}
-      = raw @snippet.colorize(options: { linenos: 'True'})
+  .personal-snippets
+    = render 'shared/snippets/blob', blob: @blob
 
-= render "notes/notes", tid: @snippet.id, tt: "snippet"
+.row-content-block.top-block.content-component-block
+  = render 'award_emoji/awards_block', awardable: @snippet, inline: true
+
+#notes.limited-width-notes= render "shared/notes/notes_with_form", :autocomplete => false

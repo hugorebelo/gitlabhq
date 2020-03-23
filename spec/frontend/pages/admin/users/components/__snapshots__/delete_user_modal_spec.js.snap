@@ -1,0 +1,66 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`User Operation confirmation modal renders modal with form included 1`] = `
+<div>
+  <p>
+    content
+  </p>
+   
+  <p>
+    To confirm, type 
+    <code>
+      username
+    </code>
+  </p>
+   
+  <form
+    action="delete-url"
+    method="post"
+  >
+    <input
+      name="_method"
+      type="hidden"
+      value="delete"
+    />
+     
+    <input
+      name="authenticity_token"
+      type="hidden"
+      value="csrf"
+    />
+     
+    <gl-form-input-stub
+      autocomplete="off"
+      autofocus=""
+      name="username"
+      type="text"
+      value=""
+    />
+  </form>
+   
+  <gl-button-stub
+    size="md"
+    variant="secondary"
+  >
+    Cancel
+  </gl-button-stub>
+   
+  <gl-button-stub
+    disabled="true"
+    size="md"
+    variant="warning"
+  >
+    
+      secondaryAction
+    
+  </gl-button-stub>
+   
+  <gl-button-stub
+    disabled="true"
+    size="md"
+    variant="danger"
+  >
+    action
+  </gl-button-stub>
+</div>
+`;

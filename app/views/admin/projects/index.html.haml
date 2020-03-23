@@ -1,28 +1,37 @@
-%h3
-  Projects
-  = link_to 'New Project', new_admin_project_path, class: "btn small right"
-%br
-= form_tag admin_projects_path, method: :get do 
-  = text_field_tag :name, params[:name], class: "xlarge"
-  = submit_tag "Search", class: "btn submit primary"
+- page_title _('Projects')
+- params[:visibility_level] ||= []
 
-%table.admin-table
-  %thead
-    %th Name
-    %th Path
-    %th Team Members
-    %th Post Receive
-    %th Last Commit
-    %th Edit
-    %th.cred Danger Zone!
+.top-area.scrolling-tabs-container.inner-page-scroll-tabs
+  %ul.nav-links.nav.nav-tabs
+    - opts = params[:visibility_level].present? ? {} : { page: admin_projects_path }
+    = nav_link(opts) do
+      = link_to _('All'), admin_projects_path
 
-  - @admin_projects.each do |project|
-    %tr
-      %td= link_to project.name, [:admin, project]
-      %td= project.path
-      %td= project.users_projects.count
-      %td= check_box_tag :post_receive_file, 1, project.has_post_receive_file?, disabled: true
-      %td= last_commit(project)
-      %td= link_to 'Edit', edit_admin_project_path(project), id: "edit_#{dom_id(project)}", class: "btn small"
-      %td.bgred= link_to 'Destroy', [:admin, project], confirm: "REMOVE #{project.name}? Are you sure?", method: :delete, class: "btn small danger"
-= paginate @admin_projects, theme: "admin"
+    = nav_link(html_options: { class: active_when(params[:visibility_level] == Gitlab::VisibilityLevel::PRIVATE.to_s) }) do
+      = link_to _('Private'), admin_projects_path(visibility_level: Gitlab::VisibilityLevel::PRIVATE)
+    = nav_link(html_options: { class: active_when(params[:visibility_level] == Gitlab::VisibilityLevel::INTERNAL.to_s) }) do
+      = link_to _('Internal'), admin_projects_path(visibility_level: Gitlab::VisibilityLevel::INTERNAL)
+    = nav_link(html_options: { class: active_when(params[:visibility_level] == Gitlab::VisibilityLevel::PUBLIC.to_s) }) do
+      = link_to _('Public'), admin_projects_path(visibility_level: Gitlab::VisibilityLevel::PUBLIC)
+
+  .nav-controls
+    .search-holder
+      = render 'shared/projects/search_form', autofocus: true, admin_view: true
+      .dropdown
+        - toggle_text = 'Namespace'
+        - if params[:namespace_id].present?
+          = hidden_field_tag :namespace_id, params[:namespace_id]
+          - namespace = Namespace.find(params[:namespace_id])
+          - toggle_text = "#{namespace.kind}: #{namespace.full_path}"
+        = dropdown_toggle(toggle_text, { toggle: 'dropdown', is_filter: 'true' }, { toggle_class: 'js-namespace-select large' })
+        .dropdown-menu.dropdown-select.dropdown-menu-right
+          = dropdown_title('Namespaces')
+          = dropdown_filter("Search for Namespace")
+          = dropdown_content
+          = dropdown_loading
+      = render 'shared/projects/dropdown'
+      = link_to new_project_path, class: 'btn btn-success' do
+        New Project
+      = button_tag "Search", class: "btn btn-primary btn-search hide"
+
+= render 'projects'

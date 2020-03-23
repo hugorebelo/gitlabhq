@@ -1,0 +1,63 @@
+.qa-job-base:
+  extends:
+    - .default-retry
+  stage: test
+  needs: []
+  cache:
+    key: "qa-framework-jobs:v1"
+    paths:
+      - vendor/ruby
+  before_script:
+    - '[ "$FOSS_ONLY" = "1" ] && rm -rf ee/ qa/spec/ee/ qa/qa/specs/features/ee/ qa/qa/ee/ qa/qa/ee.rb'
+    - cd qa/
+    - bundle install --clean --jobs=$(nproc) --path=vendor --retry=3 --quiet
+    - bundle check
+
+qa:internal:
+  extends:
+    - .qa-job-base
+    - .qa:rules:ee-and-foss
+  script:
+    - bundle exec rspec
+
+qa:internal-as-if-foss:
+  extends:
+    - .qa-job-base
+    - .qa:rules:ee-only
+    - .as-if-foss
+  script:
+    - bundle exec rspec
+
+qa:selectors:
+  extends:
+    - .qa-job-base
+    - .qa:rules:ee-and-foss
+  script:
+    - bundle exec bin/qa Test::Sanity::Selectors
+
+qa:selectors-as-if-foss:
+  extends:
+    - qa:selectors
+    - .qa:rules:ee-only
+    - .as-if-foss
+
+.package-and-qa-base:
+  image: ruby:2.6-alpine
+  stage: qa
+  dependencies: []
+  retry: 0
+  script:
+    - source scripts/utils.sh
+    - install_gitlab_gem
+    - ./scripts/trigger-build omnibus
+
+package-and-qa:
+  extends:
+    - .package-and-qa-base
+    - .qa:rules:package-and-qa
+  needs:
+    - job: build-qa-image
+      artifacts: false
+    - job: gitlab:assets:compile pull-cache
+      artifacts: false
+  allow_failure: true

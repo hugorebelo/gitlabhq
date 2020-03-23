@@ -1,47 +1,74 @@
-- if current_user.require_ssh_key?
-  .alert-message.block-message.error
-    %ul
-      %li You have no ssh keys added to your profile.
-      %li You wont be able to pull/push repository.
-      %li Visit profile &rarr; keys and add public key of every machine you want to use for work with gitlabhq.
+- @content_class = "limit-container-width" unless fluid_layout
+- breadcrumb_title _("Details")
 
-.alert-message.block-message.error
-  %ul.unstyled.alert_holder
-    %li You should push repository to proceed.
-    %li After push you will be able to browse code, commits etc.
+= render partial: 'flash_messages', locals: { project: @project }
 
-- bash_lexer = Pygments::Lexer[:bash]
-%div.git-empty
-  %h3 Git global setup:
-  - setup_str = ["git config --global user.name \"#{current_user.name}\"",
-    "git config --global user.email  \"#{current_user.email}\""].join("\n")
-  = preserve do
-    = raw bash_lexer.highlight(setup_str, lexer: 'bash', options: {encoding: 'utf-8'})
+%div{ class: [("limit-container-width" unless fluid_layout)] }
+  = render "home_panel"
 
-  %br
-  %br
-  %h3 Create Repository
-  - repo_setup_str = ["mkdir #{@project.path}",
-    "cd #{@project.path}",
-    "git init",
-    "touch README",
-    "git add README",
-    "git commit -m 'first commit'",
-    "git remote add origin #{@project.url_to_repo}",
-    "git push -u origin master"].join("\n")
+  %h4.prepend-top-0.append-bottom-8
+    = _('The repository for this project is empty')
 
-  = preserve do
-    = raw bash_lexer.highlight(repo_setup_str)
+  - if @project.can_current_user_push_code?
+    %p.append-bottom-0
+      = _('You can get started by cloning the repository or start adding files to it with one of the following options.')
 
-  %br
-  %br
-  %h3 Existing Git Repo?
-  - exist_repo_setup_str = ["cd existing_git_repo",
-    "git remote add origin #{@project.url_to_repo}",
-    "git push -u origin master"].join("\n")
-  = preserve do
-    = raw bash_lexer.highlight(exist_repo_setup_str)
+  .project-buttons.qa-quick-actions
+    .project-clone-holder.d-block.d-md-none.mt-2.mr-2
+      = render "shared/mobile_clone_panel"
 
-  - if can? current_user, :admin_project, @project
-    .alert-message.block-message.error.prepend-top-20
-      = link_to 'Remove project', @project, confirm: 'Are you sure?', method: :delete, class: "btn danger"
+    .project-clone-holder.d-none.d-md-inline-block.mt-2.mr-2.float-left
+      = render "projects/buttons/clone"
+    = render 'stat_anchor_list', anchors: @project.empty_repo_statistics_buttons
+
+  - if can?(current_user, :push_code, @project)
+    .empty-wrapper.prepend-top-32
+      %h3#repo-command-line-instructions.page-title-empty
+        = _('Command line instructions')
+      %p
+        = _('You can also upload existing files from your computer using the instructions below.')
+      .git-empty.js-git-empty
+        %fieldset
+          %h5= _('Git global setup')
+          %pre.bg-light
+            :preserve
+              git config --global user.name "#{h git_user_name}"
+              git config --global user.email "#{h git_user_email}"
+
+        %fieldset
+          %h5= _('Create a new repository')
+          %pre.bg-light
+            :preserve
+              git clone #{ content_tag(:span, default_url_to_repo, class: 'js-clone')}
+              cd #{h @project.path}
+              touch README.md
+              git add README.md
+              git commit -m "add README"
+            - if @project.can_current_user_push_to_default_branch?
+              %span><
+                git push -u origin master
+
+        %fieldset
+          %h5= _('Push an existing folder')
+          %pre.bg-light
+            :preserve
+              cd existing_folder
+              git init
+              git remote add origin #{ content_tag(:span, default_url_to_repo, class: 'js-clone')}
+              git add .
+              git commit -m "Initial commit"
+            - if @project.can_current_user_push_to_default_branch?
+              %span><
+                git push -u origin master
+
+        %fieldset
+          %h5= _('Push an existing Git repository')
+          %pre.bg-light
+            :preserve
+              cd existing_repo
+              git remote rename origin old-origin
+              git remote add origin #{ content_tag(:span, default_url_to_repo, class: 'js-clone')}
+            - if @project.can_current_user_push_to_default_branch?
+              %span><
+                git push -u origin --all
+                git push -u origin --tags

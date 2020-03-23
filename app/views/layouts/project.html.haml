@@ -1,11 +1,14 @@
-!!! 5
-%html{ lang: "en"}
-  = render "layouts/head"
-  %body{class: "#{app_theme} project"}
-    = render "layouts/flash"
-    = render "layouts/head_panel", title: @project.name
-    .container
-      = render partial: "layouts/project_menu"
-      .content
-        = yield
+- page_title       @project.full_name
+- page_description @project.description    unless page_description
+- header_title     project_title(@project) unless header_title
+- nav              "project"
+- @left_sidebar    = true
 
+- content_for :project_javascripts do
+  - project = @target_project || @project
+  - if current_user
+    = javascript_tag nonce: true do
+      :plain
+        window.uploads_path = "#{project_uploads_path(project)}";
+
+= render template: "layouts/application"

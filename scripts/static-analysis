@@ -1,0 +1,107 @@
+#!/usr/bin/env ruby
+
+# We don't have auto-loading here
+require_relative '../lib/gitlab'
+require_relative '../lib/gitlab/popen'
+require_relative '../lib/gitlab/popen/runner'
+
+def emit_warnings(static_analysis)
+  static_analysis.warned_results.each do |result|
+    puts
+    puts "**** #{result.cmd.join(' ')} had the following warning(s):"
+    puts
+    puts result.stderr
+    puts
+  end
+end
+
+def emit_errors(static_analysis)
+  static_analysis.failed_results.each do |result|
+    puts
+    puts "**** #{result.cmd.join(' ')} failed with the following error(s):"
+    puts
+    puts result.stdout
+    puts result.stderr
+    puts
+  end
+end
+
+ALLOWED_WARNINGS = [
+  # https://github.com/browserslist/browserslist/blob/d0ec62eb48c41c218478cd3ac28684df051cc865/node.js#L329
+  # warns if caniuse-lite package is older than 6 months. Ignore this
+  # warning message so that GitLab backports don't fail.
+  "Browserslist: caniuse-lite is outdated. Please run next command `yarn upgrade`"
+].freeze
+
+def warning_count(static_analysis)
+  static_analysis.warned_results
+    .count { |result| !ALLOWED_WARNINGS.include?(result.stderr.strip) }
+end
+
+def jobs_to_run(node_index, node_total)
+  all_tasks = [
+    %w[bin/rake lint:all],
+    %w[bundle exec license_finder],
+    %w[yarn run eslint],
+    %w[yarn run stylelint],
+    %w[yarn run prettier-all],
+    %w[yarn run block-dependencies],
+    %w[bundle exec rubocop --parallel],
+    %w[scripts/lint-conflicts.sh],
+    %w[scripts/lint-rugged],
+    %w[scripts/frontend/check_no_partial_karma_jest.sh],
+    %w[scripts/lint-changelog-filenames],
+    %w[scripts/gemfile_lock_changed.sh]
+  ]
+
+  case node_total
+  when 1
+    all_tasks
+  when 2
+    rake_lint_all, *rest_jobs = all_tasks
+    case node_index
+    when 1
+      [rake_lint_all]
+    else
+      rest_jobs
+    end
+  else
+    raise "Parallelization > 2 (currently set to #{node_total}) isn't supported yet!"
+  end
+end
+
+tasks = jobs_to_run((ENV['CI_NODE_INDEX'] || 1).to_i, (ENV['CI_NODE_TOTAL'] || 1).to_i)
+static_analysis = Gitlab::Popen::Runner.new
+
+static_analysis.run(tasks) do |cmd, &run|
+  puts
+  puts "$ #{cmd.join(' ')}"
+
+  result = run.call
+
+  puts "==> Finished in #{result.duration} seconds"
+  puts
+end
+
+puts
+puts '==================================================='
+puts
+puts
+
+if static_analysis.all_success_and_clean?
+  puts 'All static analyses passed successfully.'
+elsif static_analysis.all_success?
+  puts 'All static analyses passed successfully, but we have warnings:'
+  puts
+
+  emit_warnings(static_analysis)
+
+  exit 2 if warning_count(static_analysis).nonzero?
+else
+  puts 'Some static analyses failed:'
+
+  emit_warnings(static_analysis)
+  emit_errors(static_analysis)
+
+  exit 1
+end

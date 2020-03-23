@@ -1,2 +1,10 @@
-= render "projects/project_head"
-= render "snippets/form"
+- @hide_top_links = true
+- @hide_breadcrumbs = true
+- page_title _("New Snippet")
+- @content_class = "limit-container-width" unless fluid_layout
+
+.page-title-holder.d-flex.align-items-center
+  %h1.page-title= _('New Snippet')
+
+.prepend-top-default
+  = render "shared/snippets/form", url: snippets_path(@snippet)

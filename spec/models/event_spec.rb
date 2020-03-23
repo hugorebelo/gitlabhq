@@ -1,77 +1,633 @@
-# == Schema Information
-#
-# Table name: events
-#
-#  id          :integer(4)      not null, primary key
-#  target_type :string(255)
-#  target_id   :integer(4)
-#  title       :string(255)
-#  data        :text
-#  project_id  :integer(4)
-#  created_at  :datetime        not null
-#  updated_at  :datetime        not null
-#  action      :integer(4)
-#  author_id   :integer(4)
-#
+# frozen_string_literal: true
 
 require 'spec_helper'
 
 describe Event do
   describe "Associations" do
-    it { should belong_to(:project) }
+    it { is_expected.to belong_to(:project) }
+    it { is_expected.to belong_to(:target) }
   end
 
   describe "Respond to" do
-    it { should respond_to(:author_name) }
-    it { should respond_to(:author_email) }
-    it { should respond_to(:issue_title) }
-    it { should respond_to(:merge_request_title) }
-    it { should respond_to(:commits) }
+    it { is_expected.to respond_to(:author_name) }
+    it { is_expected.to respond_to(:author_email) }
+    it { is_expected.to respond_to(:issue_title) }
+    it { is_expected.to respond_to(:merge_request_title) }
   end
 
-  describe "Creation" do
-    before do 
-      @event = Factory :event
+  describe 'Callbacks' do
+    let(:project) { create(:project) }
+
+    describe 'after_create :reset_project_activity' do
+      it 'calls the reset_project_activity method' do
+        expect_next_instance_of(described_class) do |instance|
+          expect(instance).to receive(:reset_project_activity)
+        end
+
+        create_push_event(project, project.owner)
+      end
     end
 
-    it "should create a valid event" do 
-      @event.should be_valid
+    describe 'after_create :set_last_repository_updated_at' do
+      context 'with a push event' do
+        it 'updates the project last_repository_updated_at' do
+          project.update(last_repository_updated_at: 1.year.ago)
+
+          create_push_event(project, project.owner)
+
+          project.reload
+
+          expect(project.last_repository_updated_at).to be_within(1.minute).of(Time.now)
+        end
+      end
+
+      context 'without a push event' do
+        it 'does not update the project last_repository_updated_at' do
+          project.update(last_repository_updated_at: 1.year.ago)
+
+          create(:closed_issue_event, project: project, author: project.owner)
+
+          project.reload
+
+          expect(project.last_repository_updated_at).to be_within(1.minute).of(1.year.ago)
+        end
+      end
+    end
+
+    describe '#set_last_repository_updated_at' do
+      it 'only updates once every Event::REPOSITORY_UPDATED_AT_INTERVAL minutes' do
+        last_known_timestamp = (Event::REPOSITORY_UPDATED_AT_INTERVAL - 1.minute).ago
+        project.update(last_repository_updated_at: last_known_timestamp)
+        project.reload # a reload removes fractions of seconds
+
+        expect do
+          create_push_event(project, project.owner)
+          project.reload
+        end.not_to change { project.last_repository_updated_at }
+      end
+    end
+
+    describe 'after_create :track_user_interacted_projects' do
+      let(:event) { build(:push_event, project: project, author: project.owner) }
+
+      it 'passes event to UserInteractedProject.track' do
+        expect(UserInteractedProject).to receive(:available?).and_return(true)
+        expect(UserInteractedProject).to receive(:track).with(event)
+        event.save
+      end
+
+      it 'does not call UserInteractedProject.track if its not yet available' do
+        expect(UserInteractedProject).to receive(:available?).and_return(false)
+        expect(UserInteractedProject).not_to receive(:track)
+        event.save
+      end
     end
   end
 
-  describe "Push event" do 
-    before do 
-      project = Factory :project
-      @user = project.owner
+  describe "Push event" do
+    let(:project) { create(:project, :private) }
+    let(:user) { project.owner }
+    let(:event) { create_push_event(project, user) }
 
-      data = { 
-        before: "0000000000000000000000000000000000000000",
-        after: "0220c11b9a3e6c69dc8fd35321254ca9a7b98f7e",
-        ref: "refs/heads/master",
-        user_id: @user.id,
-        user_name: @user.name,
-        repository: {
-          name: project.name,
-          url: "localhost/rubinius",
-          description: "",
-          homepage: "localhost/rubinius",
-          private: true
-        }
+    it do
+      expect(event.push_action?).to be_truthy
+      expect(event.visible_to_user?(user)).to be_truthy
+      expect(event.visible_to_user?(nil)).to be_falsey
+      expect(event.tag?).to be_falsey
+      expect(event.branch_name).to eq("master")
+      expect(event.author).to eq(user)
+    end
+  end
+
+  describe '#target_title' do
+    let_it_be(:project) { create(:project) }
+
+    let(:author) { project.owner }
+    let(:target) { nil }
+
+    let(:event) do
+      described_class.new(project: project,
+                          target: target,
+                          author_id: author.id)
+    end
+
+    context 'for an issue' do
+      let(:title) { generate(:title) }
+      let(:issue) { create(:issue, title: title, project: project) }
+      let(:target) { issue }
+
+      it 'delegates to issue title' do
+        expect(event.target_title).to eq(title)
+      end
+    end
+
+    context 'for a wiki page' do
+      let(:title) { generate(:wiki_page_title) }
+      let(:wiki_page) { create(:wiki_page, title: title, project: project) }
+      let(:event) { create(:wiki_page_event, project: project, wiki_page: wiki_page) }
+
+      it 'delegates to wiki page title' do
+        expect(event.target_title).to eq(wiki_page.title)
+      end
+    end
+  end
+
+  describe '#membership_changed?' do
+    context "created" do
+      subject { build(:event, :created).membership_changed? }
+
+      it { is_expected.to be_falsey }
+    end
+
+    context "updated" do
+      subject { build(:event, :updated).membership_changed? }
+
+      it { is_expected.to be_falsey }
+    end
+
+    context "expired" do
+      subject { build(:event, :expired).membership_changed? }
+
+      it { is_expected.to be_truthy }
+    end
+
+    context "left" do
+      subject { build(:event, :left).membership_changed? }
+
+      it { is_expected.to be_truthy }
+    end
+
+    context "joined" do
+      subject { build(:event, :joined).membership_changed? }
+
+      it { is_expected.to be_truthy }
+    end
+  end
+
+  describe '#note?' do
+    subject { described_class.new(project: target.project, target: target) }
+
+    context 'issue note event' do
+      let(:target) { create(:note_on_issue) }
+
+      it { is_expected.to be_note }
+    end
+
+    context 'merge request diff note event' do
+      let(:target) { create(:legacy_diff_note_on_merge_request) }
+
+      it { is_expected.to be_note }
+    end
+  end
+
+  describe '#visible_to_user?' do
+    let_it_be(:non_member) { create(:user) }
+    let_it_be(:member) { create(:user) }
+    let_it_be(:guest) { create(:user) }
+    let_it_be(:author) { create(:author) }
+    let_it_be(:assignee) { create(:user) }
+    let_it_be(:admin) { create(:admin) }
+    let_it_be(:public_project) { create(:project, :public) }
+    let_it_be(:private_project) { create(:project, :private) }
+
+    let(:project) { public_project }
+    let(:issue) { create(:issue, project: project, author: author, assignees: [assignee]) }
+    let(:confidential_issue) { create(:issue, :confidential, project: project, author: author, assignees: [assignee]) }
+    let(:project_snippet) { create(:project_snippet, :public, project: project, author: author) }
+    let(:personal_snippet) { create(:personal_snippet, :public, author: author) }
+    let(:note_on_commit) { create(:note_on_commit, project: project) }
+    let(:note_on_issue) { create(:note_on_issue, noteable: issue, project: project) }
+    let(:note_on_confidential_issue) { create(:note_on_issue, noteable: confidential_issue, project: project) }
+    let(:note_on_project_snippet) { create(:note_on_project_snippet, author: author, noteable: project_snippet, project: project) }
+    let(:note_on_personal_snippet) { create(:note_on_personal_snippet, author: author, noteable: personal_snippet, project: nil) }
+    let(:milestone_on_project) { create(:milestone, project: project) }
+    let(:event) do
+      described_class.new(project: project,
+                          target: target,
+                          author_id: author.id)
+    end
+
+    before do
+      project.add_developer(member)
+      project.add_guest(guest)
+    end
+
+    def visible_to_all
+      {
+        logged_out: true,
+        non_member: true,
+        guest: true,
+        member: true,
+        admin: true
       }
-
-      @event = Event.create(
-        project: project,
-        action: Event::Pushed,
-        data: data,
-        author_id: @user.id
-      )
     end
 
-    it { @event.push?.should be_true }
-    it { @event.allowed?.should be_true }
-    it { @event.new_branch?.should be_true }
-    it { @event.tag?.should be_false }
-    it { @event.branch_name.should == "master" }
-    it { @event.author.should == @user }
+    def visible_to_none
+      visible_to_all.transform_values { |_| false }
+    end
+
+    def visible_to_none_except(*roles)
+      visible_to_none.merge(roles.map { |role| [role, true] }.to_h)
+    end
+
+    def visible_to_all_except(*roles)
+      visible_to_all.merge(roles.map { |role| [role, false] }.to_h)
+    end
+
+    shared_examples 'visibility examples' do
+      it 'has the correct visibility' do
+        expect({
+          logged_out: event.visible_to_user?(nil),
+          non_member: event.visible_to_user?(non_member),
+          guest: event.visible_to_user?(guest),
+          member: event.visible_to_user?(member),
+          admin: event.visible_to_user?(admin)
+        }).to match(visibility)
+      end
+    end
+
+    shared_examples 'visible to assignee' do |visible|
+      it { expect(event.visible_to_user?(assignee)).to eq(visible) }
+    end
+
+    shared_examples 'visible to author' do |visible|
+      it { expect(event.visible_to_user?(author)).to eq(visible) }
+    end
+
+    shared_examples 'visible to assignee and author' do |visible|
+      include_examples 'visible to assignee', visible
+      include_examples 'visible to author', visible
+    end
+
+    context 'commit note event' do
+      let(:project) { create(:project, :public, :repository) }
+      let(:target) { note_on_commit }
+
+      include_examples 'visibility examples' do
+        let(:visibility) { visible_to_all }
+      end
+
+      context 'private project' do
+        let(:project) { create(:project, :private, :repository) }
+
+        include_examples 'visibility examples' do
+          let(:visibility) { visible_to_none_except(:member, :admin) }
+        end
+      end
+    end
+
+    context 'issue event' do
+      context 'for non confidential issues' do
+        let(:target) { issue }
+
+        include_examples 'visibility examples' do
+          let(:visibility) { visible_to_all }
+        end
+        include_examples 'visible to assignee and author', true
+      end
+
+      context 'for confidential issues' do
+        let(:target) { confidential_issue }
+
+        include_examples 'visibility examples' do
+          let(:visibility) { visible_to_none_except(:member, :admin) }
+        end
+        include_examples 'visible to assignee and author', true
+      end
+    end
+
+    context 'issue note event' do
+      context 'on non confidential issues' do
+        let(:target) { note_on_issue }
+
+        include_examples 'visibility examples' do
+          let(:visibility) { visible_to_all }
+        end
+        include_examples 'visible to assignee and author', true
+      end
+
+      context 'on confidential issues' do
+        let(:target) { note_on_confidential_issue }
+
+        include_examples 'visibility examples' do
+          let(:visibility) { visible_to_none_except(:member, :admin) }
+        end
+        include_examples 'visible to assignee and author', true
+      end
+
+      context 'private project' do
+        let(:project) { private_project }
+        let(:target) { note_on_issue }
+
+        include_examples 'visibility examples' do
+          let(:visibility) { visible_to_none_except(:guest, :member, :admin) }
+        end
+
+        include_examples 'visible to assignee and author', false
+      end
+    end
+
+    context 'merge request diff note event' do
+      let(:merge_request) { create(:merge_request, source_project: project, author: author, assignees: [assignee]) }
+      let(:note_on_merge_request) { create(:legacy_diff_note_on_merge_request, noteable: merge_request, project: project) }
+      let(:target) { note_on_merge_request }
+
+      context 'public project' do
+        let(:project) { public_project }
+
+        include_examples 'visibility examples' do
+          let(:visibility) { visible_to_all }
+        end
+
+        include_examples 'visible to assignee', true
+      end
+
+      context 'private project' do
+        let(:project) { private_project }
+
+        include_examples 'visibility examples' do
+          let(:visibility) { visible_to_none_except(:member, :admin) }
+        end
+
+        include_examples 'visible to assignee', false
+      end
+    end
+
+    context 'milestone event' do
+      let(:target) { milestone_on_project }
+
+      include_examples 'visibility examples' do
+        let(:visibility) { visible_to_all }
+      end
+
+      context 'on public project with private issue tracker and merge requests' do
+        let(:project) { create(:project, :public, :issues_private, :merge_requests_private) }
+
+        include_examples 'visibility examples' do
+          let(:visibility) { visible_to_all_except(:logged_out, :non_member) }
+        end
+      end
+
+      context 'on private project' do
+        let(:project) { create(:project, :private) }
+
+        include_examples 'visibility examples' do
+          let(:visibility) { visible_to_all_except(:logged_out, :non_member) }
+        end
+      end
+    end
+
+    context 'wiki-page event', :aggregate_failures do
+      let(:event) { create(:wiki_page_event, project: project) }
+
+      context 'on private project', :aggregate_failures do
+        let(:project) { create(:project, :wiki_repo) }
+
+        include_examples 'visibility examples' do
+          let(:visibility) { visible_to_all_except(:logged_out, :non_member) }
+        end
+      end
+
+      context 'wiki-page event on public project', :aggregate_failures do
+        let(:project) { create(:project, :public, :wiki_repo) }
+
+        include_examples 'visibility examples' do
+          let(:visibility) { visible_to_all }
+        end
+      end
+    end
+
+    context 'project snippet note event' do
+      let(:target) { note_on_project_snippet }
+
+      include_examples 'visibility examples' do
+        let(:visibility) { visible_to_all }
+      end
+
+      context 'on public project with private snippets' do
+        let(:project) { create(:project, :public, :snippets_private) }
+
+        include_examples 'visibility examples' do
+          let(:visibility) { visible_to_none_except(:guest, :member, :admin) }
+        end
+        # Normally, we'd expect the author of a comment to be able to view it.
+        # However, this doesn't seem to be the case for comments on snippets.
+        include_examples 'visible to author', false
+      end
+
+      context 'on private project' do
+        let(:project) { create(:project, :private) }
+
+        include_examples 'visibility examples' do
+          let(:visibility) { visible_to_none_except(:guest, :member, :admin) }
+        end
+        # Normally, we'd expect the author of a comment to be able to view it.
+        # However, this doesn't seem to be the case for comments on snippets.
+        include_examples 'visible to author', false
+      end
+    end
+
+    context 'personal snippet note event' do
+      let(:target) { note_on_personal_snippet }
+
+      include_examples 'visibility examples' do
+        let(:visibility) { visible_to_all }
+      end
+      include_examples 'visible to author', true
+
+      context 'on internal snippet' do
+        let(:personal_snippet) { create(:personal_snippet, :internal, author: author) }
+
+        include_examples 'visibility examples' do
+          let(:visibility) { visible_to_all_except(:logged_out) }
+        end
+      end
+
+      context 'on private snippet' do
+        let(:personal_snippet) { create(:personal_snippet, :private, author: author) }
+
+        include_examples 'visibility examples' do
+          let(:visibility) { visible_to_none_except(:admin) }
+        end
+        include_examples 'visible to author', true
+      end
+    end
+  end
+
+  describe '.for_wiki_page' do
+    let_it_be(:events) do
+      [
+        create(:closed_issue_event),
+        create(:wiki_page_event),
+        create(:closed_issue_event),
+        create(:event, :created),
+        create(:wiki_page_event)
+      ]
+    end
+
+    it 'only contains the wiki page events' do
+      wiki_events = events.select(&:wiki_page?)
+
+      expect(described_class.for_wiki_page).to match_array(wiki_events)
+    end
+  end
+
+  describe '#wiki_page and #wiki_page?' do
+    let_it_be(:project) { create(:project, :repository) }
+
+    context 'for a wiki page event' do
+      let(:wiki_page) do
+        create(:wiki_page, :with_real_page, project: project)
+      end
+
+      subject(:event) { create(:wiki_page_event, project: project, wiki_page: wiki_page) }
+
+      it { is_expected.to have_attributes(wiki_page?: be_truthy, wiki_page: wiki_page) }
+    end
+
+    [:issue, :user, :merge_request, :snippet, :milestone, nil].each do |kind|
+      context "for a #{kind} event" do
+        it 'is nil' do
+          target = create(kind) if kind
+          event = create(:event, project: project, target: target)
+
+          expect(event).to have_attributes(wiki_page: be_nil, wiki_page?: be_falsy)
+        end
+      end
+    end
+  end
+
+  describe '.limit_recent' do
+    let!(:event1) { create(:closed_issue_event) }
+    let!(:event2) { create(:closed_issue_event) }
+
+    describe 'without an explicit limit' do
+      subject { described_class.limit_recent }
+
+      it { is_expected.to eq([event2, event1]) }
+    end
+
+    describe 'with an explicit limit' do
+      subject { described_class.limit_recent(1) }
+
+      it { is_expected.to eq([event2]) }
+    end
+  end
+
+  describe '#reset_project_activity' do
+    let(:project) { create(:project) }
+
+    context 'when a project was updated less than 1 hour ago' do
+      it 'does not update the project' do
+        project.update(last_activity_at: Time.now)
+
+        expect(project).not_to receive(:update_column)
+          .with(:last_activity_at, a_kind_of(Time))
+
+        create_push_event(project, project.owner)
+      end
+    end
+
+    context 'when a project was updated more than 1 hour ago' do
+      it 'updates the project' do
+        project.update(last_activity_at: 1.year.ago)
+
+        create_push_event(project, project.owner)
+
+        project.reload
+
+        expect(project.last_activity_at).to be_within(1.minute).of(Time.now)
+      end
+    end
+  end
+
+  describe '#authored_by?' do
+    let(:event) { build(:event) }
+
+    it 'returns true when the event author and user are the same' do
+      expect(event.authored_by?(event.author)).to eq(true)
+    end
+
+    it 'returns false when passing nil as an argument' do
+      expect(event.authored_by?(nil)).to eq(false)
+    end
+
+    it 'returns false when the given user is not the author of the event' do
+      user = double(:user, id: -1)
+
+      expect(event.authored_by?(user)).to eq(false)
+    end
+  end
+
+  describe '#body?' do
+    let(:push_event) do
+      event = build(:push_event)
+
+      allow(event).to receive(:push?).and_return(true)
+
+      event
+    end
+
+    it 'returns true for a push event with commits' do
+      allow(push_event).to receive(:push_with_commits?).and_return(true)
+
+      expect(push_event).to be_body
+    end
+
+    it 'returns false for a push event without a valid commit range' do
+      allow(push_event).to receive(:push_with_commits?).and_return(false)
+
+      expect(push_event).not_to be_body
+    end
+
+    it 'returns true for a Note event' do
+      event = build(:event)
+
+      allow(event).to receive(:note?).and_return(true)
+
+      expect(event).to be_body
+    end
+
+    it 'returns true if the target responds to #title' do
+      event = build(:event)
+
+      allow(event).to receive(:target).and_return(double(:target, title: 'foo'))
+
+      expect(event).to be_body
+    end
+
+    it 'returns false for a regular event without a target' do
+      event = build(:event)
+
+      expect(event).not_to be_body
+    end
+  end
+
+  describe '#target' do
+    it 'eager loads the author of an event target' do
+      create(:closed_issue_event)
+
+      events = described_class.preload(:target).all.to_a
+      count = ActiveRecord::QueryRecorder
+        .new { events.first.target.author }.count
+
+      # This expectation exists to make sure the test doesn't pass when the
+      # author is for some reason not loaded at all.
+      expect(events.first.target.author).to be_an_instance_of(User)
+
+      expect(count).to be_zero
+    end
+  end
+
+  def create_push_event(project, user)
+    event = create(:push_event, project: project, author: user)
+
+    create(:push_event_payload,
+           event: event,
+           commit_to: '1cf19a015df3523caf0a1f9d40c98a267d6a2fc2',
+           commit_count: 0,
+           ref: 'master')
+
+    event
   end
 end

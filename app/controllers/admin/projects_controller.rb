@@ -1,68 +1,80 @@
-class Admin::ProjectsController < ApplicationController
-  layout "admin"
-  before_filter :authenticate_user!
-  before_filter :authenticate_admin!
-  before_filter :admin_project, only: [:edit, :show, :update, :destroy, :team_update]
+# frozen_string_literal: true
+
+class Admin::ProjectsController < Admin::ApplicationController
+  include MembersPresentation
+
+  before_action :project, only: [:show, :transfer, :repository_check, :destroy]
+  before_action :group, only: [:show, :transfer]
 
   def index
-    @admin_projects = Project.scoped
-    @admin_projects = @admin_projects.search(params[:name]) if params[:name].present?
-    @admin_projects = @admin_projects.page(params[:page]).per(20)
+    params[:sort] ||= 'latest_activity_desc'
+    @sort = params[:sort]
+    @projects = Admin::ProjectsFinder.new(params: params, current_user: current_user).execute
+
+    respond_to do |format|
+      format.html
+      format.json do
+        render json: {
+          html: view_to_html_string("admin/projects/_projects", projects: @projects)
+        }
+      end
+    end
   end
 
+  # rubocop: disable CodeReuse/ActiveRecord
   def show
-    @users = User.scoped
-    @users = @users.not_in_project(@admin_project) if @admin_project.users.present?
-    @users = @users.all
-  end
-
-  def new
-    @admin_project = Project.new
-  end
-
-  def edit
-  end
-
-  def team_update
-    @admin_project.add_users_ids_to_team(params[:user_ids], params[:project_access])
-
-    redirect_to [:admin, @admin_project], notice: 'Project was successfully updated.'
-  end
-
-  def create
-    @admin_project = Project.new(params[:project])
-    @admin_project.owner = current_user
-
-    if @admin_project.save
-      redirect_to [:admin, @admin_project], notice: 'Project was successfully created.'
-    else
-      render action: "new"
-    end
-  end
-
-  def update
-    owner_id = params[:project].delete(:owner_id)
-
-    if owner_id 
-      @admin_project.owner = User.find(owner_id)
+    if @group
+      @group_members = present_members(
+        @group.members.order("access_level DESC").page(params[:group_members_page]))
     end
 
-    if @admin_project.update_attributes(params[:project])
-      redirect_to [:admin, @admin_project], notice: 'Project was successfully updated.'
-    else
-      render action: "edit"
-    end
+    @project_members = present_members(
+      @project.members.page(params[:project_members_page]))
+    @requesters = present_members(
+      AccessRequestsFinder.new(@project).execute(current_user))
   end
+  # rubocop: enable CodeReuse/ActiveRecord
 
   def destroy
-    @admin_project.destroy
+    ::Projects::DestroyService.new(@project, current_user, {}).async_execute
+    flash[:notice] = _("Project '%{project_name}' is in the process of being deleted.") % { project_name: @project.full_name }
 
-    redirect_to admin_projects_url, notice: 'Project was successfully deleted.'
+    redirect_to admin_projects_path, status: :found
+  rescue Projects::DestroyService::DestroyError => ex
+    redirect_to admin_projects_path, status: :found, alert: ex.message
   end
 
-  private 
+  # rubocop: disable CodeReuse/ActiveRecord
+  def transfer
+    namespace = Namespace.find_by(id: params[:new_namespace_id])
+    ::Projects::TransferService.new(@project, current_user, params.dup).execute(namespace)
 
-  def admin_project
-    @admin_project = Project.find_by_code(params[:id])
+    @project.reset
+    redirect_to admin_project_path(@project)
+  end
+  # rubocop: enable CodeReuse/ActiveRecord
+
+  def repository_check
+    RepositoryCheck::SingleRepositoryWorker.perform_async(@project.id) # rubocop:disable CodeReuse/Worker
+
+    redirect_to(
+      admin_project_path(@project),
+      notice: _('Repository check was triggered.')
+    )
+  end
+
+  protected
+
+  def project
+    @project = Project.find_by_full_path(
+      [params[:namespace_id], '/', params[:id]].join('')
+    )
+    @project || render_404
+  end
+
+  def group
+    @group ||= @project.group
   end
 end
+
+Admin::ProjectsController.prepend_if_ee('EE::Admin::ProjectsController')

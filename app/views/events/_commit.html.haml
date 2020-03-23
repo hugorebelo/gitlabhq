@@ -1,8 +1,5 @@
-- commit = CommitDecorator.decorate(commit)
 %li.commit
-  %p
-    = link_to commit.short_id(8), project_commit_path(project, id: commit.id), class: "commit_short_id"
-    %strong.cdark= commit.author_name
-    &ndash;
-    = image_tag gravatar_icon(commit.author_email), class: "avatar", width: 16
-    = gfm truncate(commit.title, length: 50) rescue "--broken encoding"
+  .commit-row-title
+    = link_to truncate_sha(event.commit_id), project_commit_path(project, event.commit_id), class: "commit-sha", alt: '', title: truncate_sha(event.commit_id)
+    &middot;
+    = markdown event_commit_title(event.commit_title), project: project, pipeline: :single_line, author: event.author

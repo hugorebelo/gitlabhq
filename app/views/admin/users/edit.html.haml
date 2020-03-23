@@ -1,3 +1,5 @@
-%h3= @admin_user.name
+- page_title "Edit", @user.name, "Users"
+%h3.page-title
+  Edit user: #{@user.name}
 %hr
 = render 'form'

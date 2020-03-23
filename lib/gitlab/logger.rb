@@ -1,7 +1,21 @@
+# frozen_string_literal: true
+
 module Gitlab
   class Logger < ::Logger
+    def self.file_name
+      file_name_noext + '.log'
+    end
+
+    def self.debug(message)
+      build.debug(message)
+    end
+
     def self.error(message)
       build.error(message)
+    end
+
+    def self.warn(message)
+      build.warn(message)
     end
 
     def self.info(message)
@@ -9,17 +23,24 @@ module Gitlab
     end
 
     def self.read_latest
-      path = Rails.root.join("log/githost.log")
-      self.build unless File.exist?(path)
-      logs = File.read(path).split("\n")
+      path = self.full_log_path
+
+      return [] unless File.readable?(path)
+
+      tail_output, _ = Gitlab::Popen.popen(%W(tail -n 2000 #{path}))
+      tail_output.split("\n")
     end
 
     def self.build
-      new(File.join(Rails.root, "log/githost.log"))
+      Gitlab::SafeRequestStore[self.cache_key] ||= new(self.full_log_path)
     end
 
-    def format_message(severity, timestamp, progname, msg)
-      "#{timestamp.to_s(:long)} -> #{severity} -> #{msg}\n" 
-    end 
+    def self.full_log_path
+      Rails.root.join("log", file_name)
+    end
+
+    def self.cache_key
+      'logger:' + self.full_log_path.to_s
+    end
   end
 end

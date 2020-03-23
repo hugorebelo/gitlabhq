@@ -1,109 +1,259 @@
-%h3
-  = @admin_user.name
-  - if @admin_user.blocked
-    %small Blocked
-  - if @admin_user.admin
-    %small Administrator
-  = link_to 'Edit', edit_admin_user_path(@admin_user), class: "btn small right"
+- add_to_breadcrumbs "Users", admin_users_path
+- breadcrumb_title @user.name
+- page_title @user.name, "Users"
+= render 'admin/users/head'
 
-%br
+.row
+  .col-md-6
+    .card
+      .card-header
+        = @user.name
+      %ul.content-list
+        %li
+          = image_tag avatar_icon_for_user(@user, 60), class: "avatar s60"
+        %li
+          %span.light Profile page:
+          %strong
+            = link_to user_path(@user) do
+              = @user.username
+    = render 'admin/users/profile', user: @user
 
-%table.zebra-striped.table-bordered
-  %tr
-    %td
-      %b
-        Email:
-    %td
-      = @admin_user.email
-  %tr
-    %td
-      %b
-        Admin:
-        %td= check_box_tag "admin", 1, @admin_user.admin, disabled: :disabled
-  %tr
-    %td
-      %b
-        Blocked:
-        %td= check_box_tag "blocked", 1, @admin_user.blocked, disabled: :disabled
-  %tr
-    %td
-      %b
-        Projects limit:
-    %td
-      = @admin_user.projects_limit
-  - unless @admin_user.skype.empty?
-    %tr
-      %td
-        %b
-          Skype:
-      %td
-        = @admin_user.skype
-  - unless @admin_user.linkedin.empty?
-    %tr
-      %td
-        %b
-          Linkedin:
-      %td
-        = @admin_user.linkedin
-  - unless @admin_user.twitter.empty?
-    %tr
-      %td
-        %b
-          Twitter:
-      %td
-        = @admin_user.twitter
+    .card
+      .card-header
+        Account:
+      %ul.content-list
+        %li
+          %span.light Name:
+          %strong= @user.name
+        %li
+          %span.light Username:
+          %strong
+            = @user.username
+        %li
+          %span.light Email:
+          %strong
+            = render partial: 'shared/email_with_badge', locals: { email: mail_to(@user.email), verified: @user.confirmed? }
+        - @user.emails.each do |email|
+          %li
+            %span.light Secondary email:
+            %strong
+              = render partial: 'shared/email_with_badge', locals: { email: email.email, verified: email.confirmed? }
+            = link_to remove_email_admin_user_path(@user, email), data: { confirm: "Are you sure you want to remove #{email.email}?" }, method: :delete, class: "btn-sm btn btn-remove float-right", title: 'Remove secondary email', id: "remove_email_#{email.id}" do
+              %i.fa.fa-times
+        %li
+          %span.light ID:
+          %strong
+            = @user.id
 
-%br
-%h3 Add User to Projects
-%br
-= form_tag team_update_admin_user_path(@admin_user), class: "bulk_import", method: :put  do
-  %table.table-bordered
-    %thead
-      %tr
-        %th Projects
-        %th Project Access:
+        %li.two-factor-status
+          %span.light Two-factor Authentication:
+          %strong{ class: @user.two_factor_enabled? ? 'cgreen' : 'cred' }
+            - if @user.two_factor_enabled?
+              Enabled
+              = link_to 'Disable', disable_two_factor_admin_user_path(@user), data: {confirm: 'Are you sure?'}, method: :patch, class: 'btn btn-sm btn-remove float-right', title: 'Disable Two-factor Authentication'
+            - else
+              Disabled
 
-    %tr
-      %td= select_tag :project_ids, options_from_collection_for_select(@projects , :id, :name),  multiple: true
-      %td= select_tag :project_access, options_for_select(Project.access_options), class: "project-access-select"
+        = render_if_exists 'admin/namespace_plan_info', namespace: @user.namespace
 
-    %tr
-      %td= submit_tag 'Add', class: "btn primary"
-      %td
-        Read more about project permissions
-        %strong= link_to "here", help_permissions_path, class: "vlink"
-%br
+        %li
+          %span.light External User:
+          %strong
+            = @user.external? ? "Yes" : "No"
+        %li
+          %span.light Can create groups:
+          %strong
+            = @user.can_create_group ? "Yes" : "No"
+        %li
+          %span.light Personal projects limit:
+          %strong
+            = @user.projects_limit
+        %li
+          %span.light Member since:
+          %strong
+            = @user.created_at.to_s(:medium)
+        - if @user.confirmed_at
+          %li
+            %span.light Confirmed at:
+            %strong
+              = @user.confirmed_at.to_s(:medium)
+        - else
+          %li
+            %span.light Confirmed:
+            %strong.cred
+              No
 
-- if @admin_user.projects.present?
-  %h3 Projects
-  %br
+        %li
+          %span.light Current sign-in IP:
+          %strong
+            - if @user.current_sign_in_ip
+              = @user.current_sign_in_ip
+            - else
+              never
 
-  %table.zebra-striped.table-bordered
-    %tr
-      %thead
-        %th Name
-        %th Project Access
-        %th
-        %th
+        %li
+          %span.light Current sign-in at:
+          %strong
+            - if @user.current_sign_in_at
+              = @user.current_sign_in_at.to_s(:medium)
+            - else
+              never
 
-    - @admin_user.users_projects.each do |tm|
-      - project = tm.project
-      %tr
-        %td= link_to project.name, admin_project_path(project)
-        %td= select_tag :tm_project_access, options_for_select(Project.access_options, tm.project_access), class: "medium project-access-select", disabled: :disabled
-        %td= link_to 'Edit Access', edit_admin_team_member_path(tm), class: "btn small"
-        %td= link_to 'Remove from team', admin_team_member_path(tm), confirm: 'Are you sure?', method: :delete, class: "btn small danger"
+        %li
+          %span.light Last sign-in IP:
+          %strong
+            - if @user.last_sign_in_ip
+              = @user.last_sign_in_ip
+            - else
+              never
 
-:css
-  form select {
-    width:150px;
-  }
+        %li
+          %span.light Last sign-in at:
+          %strong
+            - if @user.last_sign_in_at
+              = @user.last_sign_in_at.to_s(:medium)
+            - else
+              never
 
-  #project_ids {
-    width:300px;
-  }
+        %li
+          %span.light Sign-in count:
+          %strong
+            = @user.sign_in_count
 
-:javascript
-  $('select#project_ids').chosen();
-  $('select#repo_access').chosen();
-  $('select#project_access').chosen();
+        %li
+          %span.light= _("Highest role:")
+          %strong
+            = Gitlab::Access.human_access_with_none(@user.highest_role)
+
+        = render_if_exists 'admin/users/using_license_seat', user: @user
+
+        - if @user.ldap_user?
+          %li
+            %span.light LDAP uid:
+            %strong
+              = @user.ldap_identity.extern_uid
+
+        - if @user.created_by
+          %li
+            %span.light Created by:
+            %strong
+              = link_to @user.created_by.name, [:admin, @user.created_by]
+
+        = render_if_exists 'namespaces/shared_runner_status', namespace: @user.namespace
+
+  .col-md-6
+    - unless @user == current_user
+      - unless @user.confirmed?
+        .card.border-info
+          .card-header.bg-info.text-white
+            Confirm user
+          .card-body
+            - if @user.unconfirmed_email.present?
+              - email = " (#{@user.unconfirmed_email})"
+            %p This user has an unconfirmed email address#{email}. You may force a confirmation.
+            %br
+            = link_to 'Confirm user', confirm_admin_user_path(@user), method: :put, class: "btn btn-info", data: { confirm: 'Are you sure?', qa_selector: 'confirm_user_button' }
+
+      = render_if_exists 'admin/users/user_detail_note'
+
+      - if @user.deactivated?
+        .card.border-info
+          .card-header.bg-info.text-white
+            Reactivate this user
+          .card-body
+            = render partial: 'admin/users/user_activation_effects'
+            %br
+            = link_to 'Activate user', activate_admin_user_path(@user), method: :put, class: "btn btn-info", data: { confirm: 'Are you sure?' }
+      - elsif @user.can_be_deactivated?
+        .card.border-warning
+          .card-header.bg-warning.text-white
+            Deactivate this user
+          .card-body
+            = render partial: 'admin/users/user_deactivation_effects'
+            %br
+            %button.btn.btn-warning{ data: { 'gl-modal-action': 'deactivate',
+              content: 'You can always re-activate their account, their data will remain intact.',
+              url: deactivate_admin_user_path(@user),
+              username: sanitize_name(@user.name) } }
+              = s_('AdminUsers|Deactivate user')
+
+      - if @user.blocked?
+        .card.border-info
+          .card-header.bg-info.text-white
+            This user is blocked
+          .card-body
+            %p A blocked user cannot:
+            %ul
+              %li Log in
+              %li Access Git repositories
+            %br
+            = link_to 'Unblock user', unblock_admin_user_path(@user), method: :put, class: "btn btn-info", data: { confirm: 'Are you sure?' }
+      - else
+        .card.border-warning
+          .card-header.bg-warning.text-white
+            Block this user
+          .card-body
+            = render partial: 'admin/users/user_block_effects'
+            %br
+            %button.btn.btn-warning{ data: { 'gl-modal-action': 'block',
+              content: 'You can always unblock their account, their data will remain intact.',
+              url: block_admin_user_path(@user),
+              username: sanitize_name(@user.name) } }
+              = s_('AdminUsers|Block user')
+      - if @user.access_locked?
+        .card.border-info
+          .card-header.bg-info.text-white
+            This account has been locked
+          .card-body
+            %p This user has been temporarily locked due to excessive number of failed logins. You may manually unlock the account.
+            %br
+            = link_to 'Unlock user', unlock_admin_user_path(@user), method: :put, class: "btn btn-info", data: { confirm: 'Are you sure?' }
+
+      .card.border-danger
+        .card-header.bg-danger.text-white
+          = s_('AdminUsers|Delete user')
+        .card-body
+          - if @user.can_be_removed? && can?(current_user, :destroy_user, @user)
+            %p Deleting a user has the following effects:
+            = render 'users/deletion_guidance', user: @user
+            %br
+            %button.delete-user-button.btn.btn-danger{ data: { 'gl-modal-action': 'delete',
+              delete_user_url: admin_user_path(@user),
+              block_user_url: block_admin_user_path(@user),
+              username: sanitize_name(@user.name) } }
+              = s_('AdminUsers|Delete user')
+          - else
+            - if @user.solo_owned_groups.present?
+              %p
+                This user is currently an owner in these groups:
+                %strong= @user.solo_owned_groups.map(&:name).join(', ')
+              %p
+                You must transfer ownership or delete these groups before you can delete this user.
+            - else
+              %p
+                You don't have access to delete this user.
+
+      .card.border-danger
+        .card-header.bg-danger.text-white
+          = s_('AdminUsers|Delete user and contributions')
+        .card-body
+          - if can?(current_user, :destroy_user, @user)
+            %p
+              This option deletes the user and any contributions that
+              would usually be moved to the
+              = succeed "." do
+                = link_to "system ghost user", help_page_path("user/profile/account/delete_account")
+              As well as the user's personal projects, groups owned solely by
+              the user, and projects in them, will also be removed. Commits
+              to other projects are unaffected.
+            %br
+              %button.delete-user-button.btn.btn-danger{ data: { 'gl-modal-action': 'delete-with-contributions',
+                delete_user_url: admin_user_path(@user, hard_delete: true),
+                block_user_url: block_admin_user_path(@user),
+                username: @user.name } }
+                = s_('AdminUsers|Delete user and contributions')
+          - else
+            %p
+              You don't have access to delete this user.
+
+= render partial: 'admin/users/modals'

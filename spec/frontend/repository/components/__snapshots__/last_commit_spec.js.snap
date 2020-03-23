@@ -1,0 +1,209 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`Repository last commit component renders commit widget 1`] = `
+<div
+  class="info-well d-none d-sm-flex project-last-commit commit p-3"
+>
+  <user-avatar-link-stub
+    class="avatar-cell"
+    imgalt=""
+    imgcssclasses=""
+    imgsize="40"
+    imgsrc="https://test.com"
+    linkhref="https://test.com/test"
+    tooltipplacement="top"
+    tooltiptext=""
+    username=""
+  />
+   
+  <div
+    class="commit-detail flex-list"
+  >
+    <div
+      class="commit-content qa-commit-content"
+    >
+      <gl-link-stub
+        class="commit-row-message item-title"
+        href="https://test.com/commit/123"
+      >
+        
+          Commit title
+        
+      </gl-link-stub>
+       
+      <!---->
+       
+      <div
+        class="committer"
+      >
+        <gl-link-stub
+          class="commit-author-link js-user-link"
+          href="https://test.com/test"
+        >
+          
+            Test
+          
+        </gl-link-stub>
+        
+          authored
+          
+        <timeago-tooltip-stub
+          cssclass=""
+          time="2019-01-01"
+          tooltipplacement="bottom"
+        />
+      </div>
+       
+      <!---->
+    </div>
+     
+    <div
+      class="commit-actions flex-row"
+    >
+      <!---->
+       
+      <div
+        class="ci-status-link"
+      >
+        <gl-link-stub
+          class="js-commit-pipeline"
+          href="https://test.com/pipeline"
+          title="Pipeline: failed"
+        >
+          <ci-icon-stub
+            aria-label="Pipeline: failed"
+            cssclasses=""
+            size="24"
+            status="[object Object]"
+          />
+        </gl-link-stub>
+      </div>
+       
+      <div
+        class="commit-sha-group d-flex"
+      >
+        <div
+          class="label label-monospace monospace"
+        >
+          
+            12345678
+          
+        </div>
+         
+        <clipboard-button-stub
+          cssclass="btn-default"
+          text="123456789"
+          title="Copy commit SHA"
+          tooltipplacement="bottom"
+        />
+      </div>
+    </div>
+  </div>
+</div>
+`;
+
+exports[`Repository last commit component renders the signature HTML as returned by the backend 1`] = `
+<div
+  class="info-well d-none d-sm-flex project-last-commit commit p-3"
+>
+  <user-avatar-link-stub
+    class="avatar-cell"
+    imgalt=""
+    imgcssclasses=""
+    imgsize="40"
+    imgsrc="https://test.com"
+    linkhref="https://test.com/test"
+    tooltipplacement="top"
+    tooltiptext=""
+    username=""
+  />
+   
+  <div
+    class="commit-detail flex-list"
+  >
+    <div
+      class="commit-content qa-commit-content"
+    >
+      <gl-link-stub
+        class="commit-row-message item-title"
+        href="https://test.com/commit/123"
+      >
+        
+          Commit title
+        
+      </gl-link-stub>
+       
+      <!---->
+       
+      <div
+        class="committer"
+      >
+        <gl-link-stub
+          class="commit-author-link js-user-link"
+          href="https://test.com/test"
+        >
+          
+            Test
+          
+        </gl-link-stub>
+        
+          authored
+          
+        <timeago-tooltip-stub
+          cssclass=""
+          time="2019-01-01"
+          tooltipplacement="bottom"
+        />
+      </div>
+       
+      <!---->
+    </div>
+     
+    <div
+      class="commit-actions flex-row"
+    >
+      <div>
+        <button>
+          Verified
+        </button>
+      </div>
+       
+      <div
+        class="ci-status-link"
+      >
+        <gl-link-stub
+          class="js-commit-pipeline"
+          href="https://test.com/pipeline"
+          title="Pipeline: failed"
+        >
+          <ci-icon-stub
+            aria-label="Pipeline: failed"
+            cssclasses=""
+            size="24"
+            status="[object Object]"
+          />
+        </gl-link-stub>
+      </div>
+       
+      <div
+        class="commit-sha-group d-flex"
+      >
+        <div
+          class="label label-monospace monospace"
+        >
+          
+            12345678
+          
+        </div>
+         
+        <clipboard-button-stub
+          cssclass="btn-default"
+          text="123456789"
+          title="Copy commit SHA"
+          tooltipplacement="bottom"
+        />
+      </div>
+    </div>
+  </div>
+</div>
+`;

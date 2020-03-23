@@ -1,0 +1,6 @@
+.detail-page-description{ class: ("py-2" if mr_tabs_position_enabled?) }
+  %h2.title.qa-title{ class: ("mb-0" if mr_tabs_position_enabled?) }
+    = markdown_field(@merge_request, :title)
+
+  - unless mr_tabs_position_enabled?
+    = render "projects/merge_requests/description"

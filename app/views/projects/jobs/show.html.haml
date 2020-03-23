@@ -1,0 +1,8 @@
+- add_to_breadcrumbs _("Jobs"), project_jobs_path(@project)
+- breadcrumb_title "##{@build.id}"
+- page_title "#{@build.name} (##{@build.id})", _("Jobs")
+
+- content_for :page_specific_javascripts do
+  = stylesheet_link_tag 'page_bundles/xterm'
+
+#js-job-vue-app{ data: jobs_data }

@@ -1,4 +1,4 @@
-Gitlab::Application.configure do
+Rails.application.configure do
   # Settings specified here will take precedence over those in config/application.rb
 
   # Code is not reloaded between requests
@@ -9,18 +9,22 @@ Gitlab::Application.configure do
   config.action_controller.perform_caching = true
 
   # Disable Rails's static asset server (Apache or nginx will already do this)
-  config.serve_static_assets = false
+  config.public_file_server.enabled = false
 
-  # Compress JavaScripts and CSS
-  config.assets.compress = true
+  # Compress JavaScripts and CSS.
+  config.assets.js_compressor = :uglifier
+  # config.assets.css_compressor = :sass
 
   # Don't fallback to assets pipeline if a precompiled asset is missed
-  config.assets.compile = true
+  config.assets.compile = false
 
   # Generate digests for assets URLs
   config.assets.digest = true
 
-  # Defaults to Rails.root.join("public/assets")
+  # Enable compression of compiled assets using gzip.
+  config.assets.compress = true
+
+  # Defaults to nil and saved in location specified by config.assets.prefix
   # config.assets.manifest = YOUR_PATH
 
   # Specifies the header that your server uses for sending files
@@ -31,16 +35,22 @@ Gitlab::Application.configure do
   # config.force_ssl = true
 
   # See everything in the log (default is :info)
-  # config.log_level = :debug
+  config.log_level = :info
+
+  # Suppress 'Rendered template ...' messages in the log
+  # source: http://stackoverflow.com/a/16369363
+  %w{render_template render_partial render_collection}.each do |event|
+    ActiveSupport::Notifications.unsubscribe "#{event}.action_view"
+  end
+
+  # Prepend all log lines with the following tags
+  # config.log_tags = [ :subdomain, :uuid ]
 
   # Use a different logger for distributed setups
-  # config.logger = SyslogLogger.new
-
-  # Use a different cache store in production
-  config.cache_store = :memory_store
+  # config.logger = ActiveSupport::TaggedLogging.new(SyslogLogger.new)
 
   # Enable serving of images, stylesheets, and JavaScripts from an asset server
-  # config.action_controller.asset_host = "http://assets.example.com"
+  config.action_controller.asset_host = ENV['GITLAB_CDN_HOST'] if ENV['GITLAB_CDN_HOST'].present?
 
   # Precompile additional assets (application.js, application.css, and all non-JS/CSS are already added)
   # config.assets.precompile += %w( search.js )
@@ -49,11 +59,7 @@ Gitlab::Application.configure do
   # config.action_mailer.raise_delivery_errors = false
 
   # Enable threaded mode
-  # config.threadsafe!
-
-  # Enable locale fallbacks for I18n (makes lookups for any locale fall back to
-  # the I18n.default_locale when a translation can not be found)
-  config.i18n.fallbacks = true
+  # config.threadsafe! unless $rails_rake_task
 
   # Send deprecation notices to registered listeners
   config.active_support.deprecation = :notify
@@ -61,9 +67,13 @@ Gitlab::Application.configure do
   config.action_mailer.delivery_method = :sendmail
   # Defaults to:
   # # config.action_mailer.sendmail_settings = {
-  # #   :location => '/usr/sbin/sendmail',
-  # #   :arguments => '-i -t'
+  # #   location: '/usr/sbin/sendmail',
+  # #   arguments: '-i -t'
   # # }
   config.action_mailer.perform_deliveries = true
   config.action_mailer.raise_delivery_errors = true
+
+  config.eager_load = true
+
+  config.allow_concurrency = Gitlab::Runtime.multi_threaded?
 end

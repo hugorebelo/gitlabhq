@@ -1,34 +1,65 @@
-class DashboardController < ApplicationController
+# frozen_string_literal: true
+
+class DashboardController < Dashboard::ApplicationController
+  include IssuableCollectionsAction
+
+  prepend_before_action(only: [:issues]) { authenticate_sessionless_user!(:rss) }
+  prepend_before_action(only: [:issues_calendar]) { authenticate_sessionless_user!(:ics) }
+
+  before_action :event_filter, only: :activity
+  before_action :projects, only: [:issues, :merge_requests]
+  before_action :set_show_full_reference, only: [:issues, :merge_requests]
+  before_action :check_filters_presence!, only: [:issues, :merge_requests]
+
   respond_to :html
 
-  def index
-    @projects = current_user.projects_with_events.page(params[:page]).per(40)
-    @events = Event.recent_for_user(current_user).limit(20).offset(params[:offset] || 0)
-    @last_push = current_user.recent_push
-
+  def activity
     respond_to do |format|
       format.html
-      format.js
-      format.atom { render layout: false }
+
+      format.json do
+        load_events
+        pager_json('events/_events', @events.count { |event| event.visible_to_user?(current_user) })
+      end
     end
   end
 
-  # Get authored or assigned open merge requests
-  def merge_requests
-    @projects = current_user.projects.all
-    @merge_requests = current_user.cared_merge_requests.order("created_at DESC").page(params[:page]).per(20)
+  protected
+
+  def load_events
+    projects =
+      if params[:filter] == "starred"
+        ProjectsFinder.new(current_user: current_user, params: { starred: true }).execute
+      else
+        current_user.authorized_projects
+      end
+
+    @events = EventCollection
+      .new(projects, offset: params[:offset].to_i, filter: event_filter)
+      .to_a
+      .map(&:present)
+
+    Events::RenderService.new(current_user).execute(@events)
   end
 
-  # Get only assigned issues
-  def issues
-    @projects = current_user.projects.all
-    @user   = current_user
-    @issues = current_user.assigned_issues.opened.order("created_at DESC").page(params[:page]).per(20)
-    @issues = @issues.includes(:author, :project)
+  def set_show_full_reference
+    @show_full_reference = true
+  end
+
+  def check_filters_presence!
+    no_scalar_filters_set = finder_type.scalar_params.none? { |k| params.key?(k) }
+    no_array_filters_set = finder_type.array_params.none? { |k, _| params.key?(k) }
+
+    @no_filters_set = no_scalar_filters_set && no_array_filters_set
+
+    return unless @no_filters_set
+
+    # Call to set selected `state` and `sort` options in view
+    finder_options
 
     respond_to do |format|
-      format.html
-      format.atom { render layout: false }
+      format.html { render }
+      format.atom { head :bad_request }
     end
   end
 end

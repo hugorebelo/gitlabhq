@@ -1,9 +1,9 @@
-.alert-message.block-message.error
+- content_for(:title, 'Git Resource Not Found')
+%img{ :alt => "GitLab Logo", :src => image_path('logo.svg') }
+  %h1
+    404
+.container
   %h3 Git Resource Not found
   %hr
-  %p
-    Application cant get access to some
-    %span.label branch
-    or
-    %span.label commit
-    in your repository. Maybe it was moved
+  %p Application can't get access to some branch or commit in your repository. It
+  may have been moved

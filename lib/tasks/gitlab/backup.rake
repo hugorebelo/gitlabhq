@@ -1,196 +1,268 @@
 require 'active_record/fixtures'
 
 namespace :gitlab do
-  namespace :app do
+  namespace :backup do
+    # Create backup of GitLab system
+    desc 'GitLab | Backup | Create a backup of the GitLab system'
+    task create: :gitlab_environment do
+      warn_user_is_not_gitlab
 
-    # Create backup of gitlab system
-    desc "GITLAB | Create a backup of the gitlab system"
-    task :backup_create => :environment do
+      Rake::Task['gitlab:backup:db:create'].invoke
+      Rake::Task['gitlab:backup:repo:create'].invoke
+      Rake::Task['gitlab:backup:uploads:create'].invoke
+      Rake::Task['gitlab:backup:builds:create'].invoke
+      Rake::Task['gitlab:backup:artifacts:create'].invoke
+      Rake::Task['gitlab:backup:pages:create'].invoke
+      Rake::Task['gitlab:backup:lfs:create'].invoke
+      Rake::Task['gitlab:backup:registry:create'].invoke
 
-      Rake::Task["gitlab:app:db_dump"].invoke
-      Rake::Task["gitlab:app:repo_dump"].invoke
+      backup = Backup::Manager.new(progress)
+      backup.write_info
 
-      Dir.chdir(Gitlab.config.backup_path)
-
-      # saving additional informations
-      s = Hash.new
-      s["db_version"]         = "#{ActiveRecord::Migrator.current_version}"
-      s["backup_created_at"]  = "#{Time.now}"
-      s["gitlab_version"]     = %x{git rev-parse HEAD}.gsub(/\n/,"")
-      s["tar_version"]        = %x{tar --version | head -1}.gsub(/\n/,"")
-
-      File.open("#{Gitlab.config.backup_path}/backup_information.yml", "w+") do |file|
-        file << s.to_yaml.gsub(/^---\n/,'')
-      end
-
-      # create archive
-      print "Creating backup archive: #{Time.now.to_i}_gitlab_backup.tar "
-      if Kernel.system("tar -cf #{Time.now.to_i}_gitlab_backup.tar repositories/ db/ backup_information.yml")
-        puts "[DONE]".green
+      if ENV['SKIP'] && ENV['SKIP'].include?('tar')
+        backup.upload
       else
-        puts "[FAILED]".red
+        backup.pack
+        backup.upload
+        backup.cleanup
+        backup.remove_old
       end
 
-      # cleanup: remove tmp files
-      print "Deletion of tmp directories..."
-      if Kernel.system("rm -rf repositories/ db/ backup_information.yml")
-        puts "[DONE]".green
-      else
-        puts "[FAILED]".red
-      end
+      progress.puts "Warning: Your gitlab.rb and gitlab-secrets.json files contain sensitive data \n" \
+           "and are not included in this backup. You will need these files to restore a backup.\n" \
+           "Please back them up manually.".color(:red)
+      progress.puts "Backup task is done."
+    end
 
-      # delete backups
-      print "Deleting old backups... "
-      if Gitlab.config.backup_keep_time > 0
-        file_list = Dir.glob("*_gitlab_backup.tar").map { |f| f.split(/_/).first.to_i }
-        file_list.sort.each do |timestamp|
-          if Time.at(timestamp) < (Time.now - Gitlab.config.backup_keep_time)
-            %x{rm #{timestamp}_gitlab_backup.tar}
+    # Restore backup of GitLab system
+    desc 'GitLab | Backup | Restore a previously created backup'
+    task restore: :gitlab_environment do
+      warn_user_is_not_gitlab
+
+      backup = Backup::Manager.new(progress)
+      cleanup_required = backup.unpack
+      backup.verify_backup_version
+
+      unless backup.skipped?('db')
+        begin
+          unless ENV['force'] == 'yes'
+            warning = <<-MSG.strip_heredoc
+              Before restoring the database, we will remove all existing
+              tables to avoid future upgrade problems. Be aware that if you have
+              custom tables in the GitLab database these tables and all data will be
+              removed.
+            MSG
+            puts warning.color(:red)
+            ask_to_continue
+            puts 'Removing all tables. Press `Ctrl-C` within 5 seconds to abort'.color(:yellow)
+            sleep(5)
           end
+
+          # Drop all tables Load the schema to ensure we don't have any newer tables
+          # hanging out from a failed upgrade
+          puts_time 'Cleaning the database ... '.color(:blue)
+          Rake::Task['gitlab:db:drop_tables'].invoke
+          puts_time 'done'.color(:green)
+          Rake::Task['gitlab:backup:db:restore'].invoke
+        rescue Gitlab::TaskAbortedByUserError
+          puts "Quitting...".color(:red)
+          exit 1
         end
-        puts "[DONE]".green
-      else
-        puts "[SKIPPING]".yellow
       end
 
+      Rake::Task['gitlab:backup:repo:restore'].invoke unless backup.skipped?('repositories')
+      Rake::Task['gitlab:backup:uploads:restore'].invoke unless backup.skipped?('uploads')
+      Rake::Task['gitlab:backup:builds:restore'].invoke unless backup.skipped?('builds')
+      Rake::Task['gitlab:backup:artifacts:restore'].invoke unless backup.skipped?('artifacts')
+      Rake::Task['gitlab:backup:pages:restore'].invoke unless backup.skipped?('pages')
+      Rake::Task['gitlab:backup:lfs:restore'].invoke unless backup.skipped?('lfs')
+      Rake::Task['gitlab:backup:registry:restore'].invoke unless backup.skipped?('registry')
+      Rake::Task['gitlab:shell:setup'].invoke
+      Rake::Task['cache:clear'].invoke
+
+      if cleanup_required
+        backup.cleanup
+      end
+
+      puts "Warning: Your gitlab.rb and gitlab-secrets.json files contain sensitive data \n" \
+           "and are not included in this backup. You will need to restore these files manually.".color(:red)
+      puts "Restore task is done."
     end
 
+    namespace :repo do
+      task create: :gitlab_environment do
+        puts_time "Dumping repositories ...".color(:blue)
 
-    # Restore backup of gitlab system
-    desc "GITLAB | Restore a previously created backup"
-    task :backup_restore => :environment do
-
-      Dir.chdir(Gitlab.config.backup_path)
-
-      # check for existing backups in the backup dir
-      file_list = Dir.glob("*_gitlab_backup.tar").each.map { |f| f.split(/_/).first.to_i }
-      puts "no backup found" if file_list.count == 0
-      if file_list.count > 1 && ENV["BACKUP"].nil?
-        puts "Found more than one backup, please specify which one you want to restore:"
-        puts "rake gitlab:app:backup_restore BACKUP=timestamp_of_backup"
-        exit 1;
-      end
-
-      tar_file = ENV["BACKUP"].nil? ? File.join(file_list.first.to_s + "_gitlab_backup.tar") : File.join(ENV["BACKUP"] + "_gitlab_backup.tar")
-
-      unless File.exists?(tar_file)
-        puts "The specified backup doesn't exist!"
-        exit 1;
-      end
-
-      print "Unpacking backup... "
-      unless Kernel.system("tar -xf #{tar_file}")
-        puts "[FAILED]".red
-        exit 1
-      else
-        puts "[DONE]".green
-      end
-
-      settings = YAML.load_file("backup_information.yml")
-      ENV["VERSION"] = "#{settings["db_version"]}" if settings["db_version"].to_i > 0
-
-      # restoring mismatching backups can lead to unexpected problems
-      if settings["gitlab_version"] != %x{git rev-parse HEAD}.gsub(/\n/,"")
-        puts "gitlab_version mismatch:".red
-        puts "  Your current HEAD differs from the HEAD in the backup!".red
-        puts "  Please switch to the following revision and try again:".red
-        puts "  revision: #{settings["gitlab_version"]}".red
-        exit 1
-      end
-
-      Rake::Task["gitlab:app:db_restore"].invoke
-      Rake::Task["gitlab:app:repo_restore"].invoke
-
-      # cleanup: remove tmp files
-      print "Deletion of tmp directories..."
-      if Kernel.system("rm -rf repositories/ db/ backup_information.yml")
-        puts "[DONE]".green
-      else
-        puts "[FAILED]".red
-      end
-
-    end
-
-
-    ################################################################################
-    ################################# invoked tasks ################################
-
-    ################################# REPOSITORIES #################################
-
-    task :repo_dump => :environment do
-      backup_path_repo = File.join(Gitlab.config.backup_path, "repositories")
-      FileUtils.mkdir_p(backup_path_repo) until Dir.exists?(backup_path_repo)
-      puts "Dumping repositories:"
-      project = Project.all.map { |n| [n.path,n.path_to_repo] }
-      project << ["gitolite-admin.git", File.join(File.dirname(project.first.second), "gitolite-admin.git")]
-      project.each do |project|
-        print "- Dumping repository #{project.first}... "
-        if Kernel.system("cd #{project.second} > /dev/null 2>&1 && git bundle create #{backup_path_repo}/#{project.first}.bundle --all > /dev/null 2>&1")
-          puts "[DONE]".green
+        if ENV["SKIP"] && ENV["SKIP"].include?("repositories")
+          puts_time "[SKIPPED]".color(:cyan)
         else
-          puts "[FAILED]".red
+          Backup::Repository.new(progress).dump
+          puts_time "done".color(:green)
         end
+      end
+
+      task restore: :gitlab_environment do
+        puts_time "Restoring repositories ...".color(:blue)
+        Backup::Repository.new(progress).restore
+        puts_time "done".color(:green)
       end
     end
 
-    task :repo_restore => :environment do
-      backup_path_repo = File.join(Gitlab.config.backup_path, "repositories")
-      puts "Restoring repositories:"
-      project = Project.all.map { |n| [n.path,n.path_to_repo] }
-      project << ["gitolite-admin.git", File.join(File.dirname(project.first.second), "gitolite-admin.git")]
-      project.each do |project|
-        print "- Restoring repository #{project.first}... "
-        FileUtils.rm_rf(project.second) if File.dirname(project.second) # delet old stuff
-        if Kernel.system("cd #{File.dirname(project.second)} > /dev/null 2>&1 && git clone --bare #{backup_path_repo}/#{project.first}.bundle #{project.first}.git > /dev/null 2>&1")
-          permission_commands = [
-            "sudo chmod -R g+rwX #{Gitlab.config.git_base_path}",
-            "sudo chown -R #{Gitlab.config.ssh_user}:#{Gitlab.config.ssh_user} #{Gitlab.config.git_base_path}",
-            "sudo chown gitlab:gitlab /home/git/repositories/**/hooks/post-receive"
-          ]
-          permission_commands.each { |command| Kernel.system(command) }
-          puts "[DONE]".green
+    namespace :db do
+      task create: :gitlab_environment do
+        puts_time "Dumping database ... ".color(:blue)
+
+        if ENV["SKIP"] && ENV["SKIP"].include?("db")
+          puts_time "[SKIPPED]".color(:cyan)
         else
-          puts "[FAILED]".red
+          Backup::Database.new(progress).dump
+          puts_time "done".color(:green)
         end
+      end
+
+      task restore: :gitlab_environment do
+        puts_time "Restoring database ... ".color(:blue)
+        Backup::Database.new(progress).restore
+        puts_time "done".color(:green)
       end
     end
 
-    ###################################### DB ######################################
+    namespace :builds do
+      task create: :gitlab_environment do
+        puts_time "Dumping builds ... ".color(:blue)
 
-    task :db_dump => :environment do
-      backup_path_db   = File.join(Gitlab.config.backup_path, "db")
-      FileUtils.mkdir_p(backup_path_db) until Dir.exists?(backup_path_db)
-      puts "Dumping database tables:"
-      ActiveRecord::Base.connection.tables.each do |tbl|
-        print "- Dumping table #{tbl}... "
-        count = 1
-        File.open(File.join(backup_path_db, tbl + ".yml"), "w+") do |file|
-          ActiveRecord::Base.connection.select_all("SELECT * FROM `#{tbl}`").each do |line|
-            line.delete_if{|k,v| v.blank?}
-            output = {tbl + '_' + count.to_s => line}
-            file << output.to_yaml.gsub(/^---\n/,'') + "\n"
-            count += 1
+        if ENV["SKIP"] && ENV["SKIP"].include?("builds")
+          puts_time "[SKIPPED]".color(:cyan)
+        else
+          Backup::Builds.new(progress).dump
+          puts_time "done".color(:green)
+        end
+      end
+
+      task restore: :gitlab_environment do
+        puts_time "Restoring builds ... ".color(:blue)
+        Backup::Builds.new(progress).restore
+        puts_time "done".color(:green)
+      end
+    end
+
+    namespace :uploads do
+      task create: :gitlab_environment do
+        puts_time "Dumping uploads ... ".color(:blue)
+
+        if ENV["SKIP"] && ENV["SKIP"].include?("uploads")
+          puts_time "[SKIPPED]".color(:cyan)
+        else
+          Backup::Uploads.new(progress).dump
+          puts_time "done".color(:green)
+        end
+      end
+
+      task restore: :gitlab_environment do
+        puts_time "Restoring uploads ... ".color(:blue)
+        Backup::Uploads.new(progress).restore
+        puts_time "done".color(:green)
+      end
+    end
+
+    namespace :artifacts do
+      task create: :gitlab_environment do
+        puts_time "Dumping artifacts ... ".color(:blue)
+
+        if ENV["SKIP"] && ENV["SKIP"].include?("artifacts")
+          puts_time "[SKIPPED]".color(:cyan)
+        else
+          Backup::Artifacts.new(progress).dump
+          puts_time "done".color(:green)
+        end
+      end
+
+      task restore: :gitlab_environment do
+        puts_time "Restoring artifacts ... ".color(:blue)
+        Backup::Artifacts.new(progress).restore
+        puts_time "done".color(:green)
+      end
+    end
+
+    namespace :pages do
+      task create: :gitlab_environment do
+        puts_time "Dumping pages ... ".color(:blue)
+
+        if ENV["SKIP"] && ENV["SKIP"].include?("pages")
+          puts_time "[SKIPPED]".color(:cyan)
+        else
+          Backup::Pages.new(progress).dump
+          puts_time "done".color(:green)
+        end
+      end
+
+      task restore: :gitlab_environment do
+        puts_time "Restoring pages ... ".color(:blue)
+        Backup::Pages.new(progress).restore
+        puts_time "done".color(:green)
+      end
+    end
+
+    namespace :lfs do
+      task create: :gitlab_environment do
+        puts_time "Dumping lfs objects ... ".color(:blue)
+
+        if ENV["SKIP"] && ENV["SKIP"].include?("lfs")
+          puts_time "[SKIPPED]".color(:cyan)
+        else
+          Backup::Lfs.new(progress).dump
+          puts_time "done".color(:green)
+        end
+      end
+
+      task restore: :gitlab_environment do
+        puts_time "Restoring lfs objects ... ".color(:blue)
+        Backup::Lfs.new(progress).restore
+        puts_time "done".color(:green)
+      end
+    end
+
+    namespace :registry do
+      task create: :gitlab_environment do
+        puts_time "Dumping container registry images ... ".color(:blue)
+
+        if Gitlab.config.registry.enabled
+          if ENV["SKIP"] && ENV["SKIP"].include?("registry")
+            puts_time "[SKIPPED]".color(:cyan)
+          else
+            Backup::Registry.new(progress).dump
+            puts_time "done".color(:green)
           end
-          puts "[DONE]".green
-        end
-      end
-    end
-
-    task :db_restore=> :environment do
-      backup_path_db   = File.join(Gitlab.config.backup_path, "db")
-      puts "Restoring database tables:"
-      Rake::Task["db:reset"].invoke
-      Dir.glob(File.join(backup_path_db, "*.yml") ).each do |dir|
-        fixture_file = File.basename(dir, ".*" )
-        print "- Loading fixture #{fixture_file}..."
-        if File.size(dir) > 0
-          ActiveRecord::Fixtures.create_fixtures(backup_path_db, fixture_file)
-          puts "[DONE]".green
         else
-          puts "[SKIPPING]".yellow
+          puts_time "[DISABLED]".color(:cyan)
+        end
+      end
+
+      task restore: :gitlab_environment do
+        puts_time "Restoring container registry images ... ".color(:blue)
+
+        if Gitlab.config.registry.enabled
+          Backup::Registry.new(progress).restore
+          puts_time "done".color(:green)
+        else
+          puts_time "[DISABLED]".color(:cyan)
         end
       end
     end
 
-  end # namespace end: app
+    def puts_time(msg)
+      progress.puts "#{Time.now} -- #{msg}"
+    end
+
+    def progress
+      if ENV['CRON']
+        # We need an object we can say 'puts' and 'print' to; let's use a
+        # StringIO.
+        require 'stringio'
+        StringIO.new
+      else
+        $stdout
+      end
+    end
+  end # namespace end: backup
 end # namespace end: gitlab

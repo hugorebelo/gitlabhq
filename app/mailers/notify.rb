@@ -1,85 +1,219 @@
-class Notify < ActionMailer::Base
-  include Resque::Mailer
-  add_template_helper ApplicationHelper
-  add_template_helper GitlabMarkdownHelper
+# frozen_string_literal: true
 
-  default_url_options[:host]     = Gitlab.config.web_host
-  default_url_options[:protocol] = Gitlab.config.web_protocol
-  default_url_options[:port]     = Gitlab.config.web_port if Gitlab.config.web_custom_port?
+class Notify < ApplicationMailer
+  include ActionDispatch::Routing::PolymorphicRoutes
+  include GitlabRoutingHelper
+  include EmailsHelper
+  include IssuablesHelper
 
-  default from: Gitlab.config.email_from
+  include Emails::Issues
+  include Emails::MergeRequests
+  include Emails::Notes
+  include Emails::PagesDomains
+  include Emails::Projects
+  include Emails::Profile
+  include Emails::Pipelines
+  include Emails::Members
+  include Emails::AutoDevops
+  include Emails::RemoteMirrors
+  include Emails::Releases
 
-  def new_user_email(user_id, password)
-    @user = User.find(user_id)
-    @password = password
-    mail(to: @user.email, subject: "gitlab | Account was created for you")
+  helper MilestonesHelper
+  helper MergeRequestsHelper
+  helper DiffHelper
+  helper BlobHelper
+  helper EmailsHelper
+  helper MembersHelper
+  helper AvatarsHelper
+  helper GitlabRoutingHelper
+  helper IssuablesHelper
+
+  def test_email(recipient_email, subject, body)
+    mail(to: recipient_email,
+         subject: subject,
+         body: body.html_safe,
+         content_type: 'text/html'
+        )
   end
 
-  def new_issue_email(issue_id)
-    @issue = Issue.find(issue_id)
-    @project = @issue.project
-    mail(to: @issue.assignee_email, subject: "gitlab | new issue ##{@issue.id} | #{@issue.title} | #{@project.name}")
+  # Splits "gitlab.corp.company.com" up into "gitlab.corp.company.com",
+  # "corp.company.com" and "company.com".
+  # Respects set tld length so "company.co.uk" won't match "somethingelse.uk"
+  def self.allowed_email_domains
+    domain_parts = Gitlab.config.gitlab.host.split(".")
+    allowed_domains = []
+    begin
+      allowed_domains << domain_parts.join(".")
+      domain_parts.shift
+    end while domain_parts.length > ActionDispatch::Http::URL.tld_length
+
+    allowed_domains
   end
 
-  def note_wall_email(recipient_id, note_id)
-    recipient = User.find(recipient_id)
-    @note = Note.find(note_id)
-    @project = @note.project
-    mail(to: recipient.email, subject: "gitlab | #{@project.name}")
+  def can_send_from_user_email?(sender)
+    sender_domain = sender.email.split("@").last
+    self.class.allowed_email_domains.include?(sender_domain)
   end
 
-  def note_commit_email(recipient_id, note_id)
-    recipient = User.find(recipient_id)
-    @note = Note.find(note_id)
-    @commit = @note.target
-    @commit = CommitDecorator.decorate(@commit)
-    @project = @note.project
-    mail(to: recipient.email, subject: "gitlab | note for commit #{@commit.short_id} | #{@commit.title} | #{@project.name}")
+  private
+
+  # Return an email address that displays the name of the sender.
+  # Only the displayed name changes; the actual email address is always the same.
+  def sender(sender_id, send_from_user_email: false, sender_name: nil)
+    return unless sender = User.find(sender_id)
+
+    address = default_sender_address
+    address.display_name = sender_name.presence || sender.name
+
+    if send_from_user_email && can_send_from_user_email?(sender)
+      address.address = sender.email
+    end
+
+    address.format
   end
 
-  def note_merge_request_email(recipient_id, note_id)
-    recipient = User.find(recipient_id)
-    @note = Note.find(note_id)
-    @merge_request = @note.noteable
-    @project = @note.project
-    mail(to: recipient.email, subject: "gitlab | note for merge request !#{@merge_request.id} | #{@project.name}")
+  # Formats arguments into a String suitable for use as an email subject
+  #
+  # extra - Extra Strings to be inserted into the subject
+  #
+  # Examples
+  #
+  #   >> subject('Lorem ipsum')
+  #   => "Lorem ipsum"
+  #
+  #   # Automatically inserts Project name when @project is set
+  #   >> @project = Project.last
+  #   => #<Project id: 1, name: "Ruby on Rails", path: "ruby_on_rails", ...>
+  #   >> subject('Lorem ipsum')
+  #   => "Ruby on Rails | Lorem ipsum "
+  #
+  #   # Accepts multiple arguments
+  #   >> subject('Lorem ipsum', 'Dolor sit amet')
+  #   => "Lorem ipsum | Dolor sit amet"
+  def subject(*extra)
+    subject = []
+
+    subject << @project.name if @project
+    subject << @group.name if @group
+    subject.concat(extra) if extra.present?
+    subject << Gitlab.config.gitlab.email_subject_suffix if Gitlab.config.gitlab.email_subject_suffix.present?
+
+    subject.join(' | ')
   end
 
-  def note_issue_email(recipient_id, note_id)
-    recipient = User.find(recipient_id)
-    @note = Note.find(note_id)
-    @issue = @note.noteable
-    @project = @note.project
-    mail(to: recipient.email, subject: "gitlab | note for issue ##{@issue.id} | #{@project.name}")
+  # Return a string suitable for inclusion in the 'Message-Id' mail header.
+  #
+  # The message-id is generated from the unique URL to a model object.
+  def message_id(model)
+    model_name = model.class.model_name.singular_route_key
+    "<#{model_name}_#{model.id}@#{Gitlab.config.gitlab.host}>"
   end
 
-  def note_wiki_email(recipient_id, note_id)
-    recipient = User.find(recipient_id)
-    @note = Note.find(note_id)
-    @wiki = @note.noteable
-    @project = @note.project
-    mail(to: recipient.email, subject: "gitlab | note for wiki | #{@project.name}")
+  def mail_thread(model, headers = {})
+    add_project_headers
+    add_unsubscription_headers_and_links
+    add_model_headers(model)
+
+    headers['X-GitLab-Reply-Key'] = reply_key
+
+    @reason = headers['X-GitLab-NotificationReason']
+
+    if Gitlab::IncomingEmail.enabled? && @sent_notification
+      headers['Reply-To'] = Mail::Address.new(Gitlab::IncomingEmail.reply_address(reply_key)).tap do |address|
+        address.display_name = reply_display_name(model)
+      end
+
+      fallback_reply_message_id = "<reply-#{reply_key}@#{Gitlab.config.gitlab.host}>"
+      headers['References'] ||= []
+      headers['References'].unshift(fallback_reply_message_id)
+
+      @reply_by_email = true
+    end
+
+    mail(headers)
   end
 
-  def new_merge_request_email(merge_request_id)
-    @merge_request = MergeRequest.find(merge_request_id)
-    @project = @merge_request.project
-    mail(to: @merge_request.assignee_email, subject: "gitlab | new merge request !#{@merge_request.id} | #{@merge_request.title} | #{@project.name}")
+  # `model` is used on EE code
+  def reply_display_name(_model)
+    @project.full_name
   end
 
-  def reassigned_merge_request_email(recipient_id, merge_request_id, previous_assignee_id)
-    recipient = User.find(recipient_id)
-    @merge_request = MergeRequest.find(merge_request_id)
-    @previous_assignee ||= User.find(previous_assignee_id)
-    @project = @merge_request.project
-    mail(to: recipient.email, subject: "gitlab | changed merge request !#{@merge_request.id} | #{@merge_request.title} | #{@project.name}")
+  # Send an email that starts a new conversation thread,
+  # with headers suitable for grouping by thread in email clients.
+  #
+  # See: mail_answer_thread
+  def mail_new_thread(model, headers = {})
+    headers['Message-ID'] = message_id(model)
+
+    mail_thread(model, headers)
   end
 
-  def reassigned_issue_email(recipient_id, issue_id, previous_assignee_id)
-    recipient = User.find(recipient_id)
-    @issue = Issue.find(issue_id)
-    @previous_assignee ||= User.find(previous_assignee_id)
-    @project = @issue.project
-    mail(to: recipient.email, subject: "gitlab | changed issue ##{@issue.id} | #{@issue.title} | #{@project.name}")
+  # Send an email that responds to an existing conversation thread,
+  # with headers suitable for grouping by thread in email clients.
+  #
+  # For grouping emails by thread, email clients heuristics require the answers to:
+  #
+  #  * have a subject that begin by 'Re: '
+  #  * have a 'In-Reply-To' or 'References' header that references the original 'Message-ID'
+  #
+  def mail_answer_thread(model, headers = {})
+    headers['Message-ID'] = "<#{SecureRandom.hex}@#{Gitlab.config.gitlab.host}>"
+    headers['In-Reply-To'] = message_id(model)
+    headers['References'] = [message_id(model)]
+
+    headers[:subject] = "Re: #{headers[:subject]}" if headers[:subject]
+
+    mail_thread(model, headers)
+  end
+
+  def mail_answer_note_thread(model, note, headers = {})
+    headers['Message-ID'] = message_id(note)
+    headers['In-Reply-To'] = message_id(note.references.last)
+    headers['References'] = note.references.map { |ref| message_id(ref) }
+
+    headers['X-GitLab-Discussion-ID'] = note.discussion.id if note.part_of_discussion?
+
+    headers[:subject] = "Re: #{headers[:subject]}" if headers[:subject]
+
+    mail_thread(model, headers)
+  end
+
+  def reply_key
+    @reply_key ||= SentNotification.reply_key
+  end
+
+  # This method applies threading headers to the email to identify
+  # the instance we are discussing.
+  #
+  # All model instances must have `#id`, and may implement `#iid`.
+  def add_model_headers(object)
+    # Use replacement so we don't strip the module.
+    prefix = "X-GitLab-#{object.class.name.gsub(/::/, '-')}"
+
+    headers["#{prefix}-ID"] = object.id
+    headers["#{prefix}-IID"] = object.iid if object.respond_to?(:iid)
+  end
+
+  def add_project_headers
+    return unless @project
+
+    headers['X-GitLab-Project'] = @project.name
+    headers['X-GitLab-Project-Id'] = @project.id
+    headers['X-GitLab-Project-Path'] = @project.full_path
+    headers['List-Id'] = "#{@project.full_path} <#{create_list_id_string(@project)}>"
+  end
+
+  def add_unsubscription_headers_and_links
+    return unless !@labels_url && @sent_notification && @sent_notification.unsubscribable?
+
+    list_unsubscribe_methods = [unsubscribe_sent_notification_url(@sent_notification, force: true)]
+    if Gitlab::IncomingEmail.enabled? && Gitlab::IncomingEmail.supports_wildcard?
+      list_unsubscribe_methods << "mailto:#{Gitlab::IncomingEmail.unsubscribe_address(reply_key)}"
+    end
+
+    headers['List-Unsubscribe'] = list_unsubscribe_methods.map { |e| "<#{e}>" }.join(',')
+    @unsubscribe_url = unsubscribe_sent_notification_url(@sent_notification)
   end
 end
+
+Notify.prepend_if_ee('EE::Notify')

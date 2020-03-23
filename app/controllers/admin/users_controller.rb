@@ -1,112 +1,263 @@
-class Admin::UsersController < ApplicationController
-  layout "admin"
-  before_filter :authenticate_user!
-  before_filter :authenticate_admin!
+# frozen_string_literal: true
+
+class Admin::UsersController < Admin::ApplicationController
+  include RoutableActions
+
+  before_action :user, except: [:index, :new, :create]
+  before_action :check_impersonation_availability, only: :impersonate
 
   def index
-    @admin_users = User.scoped
-    @admin_users = @admin_users.filter(params[:filter])
-    @admin_users = @admin_users.search(params[:name]) if params[:name].present?
-    @admin_users = @admin_users.order("updated_at DESC").page(params[:page])
+    @users = User.filter_items(params[:filter]).order_name_asc
+    @users = @users.search_with_secondary_emails(params[:search_query]) if params[:search_query].present?
+    @users = @users.sort_by_attribute(@sort = params[:sort])
+    @users = @users.page(params[:page])
   end
 
   def show
-    @admin_user = User.find(params[:id])
-
-    @projects = if @admin_user.projects.empty?
-               Project
-             else
-               Project.without_user(@admin_user)
-             end.all
   end
 
-  def team_update
-    @admin_user = User.find(params[:id])
-
-    UsersProject.user_bulk_import(
-      @admin_user, 
-      params[:project_ids],
-      params[:project_access]
-    )
-
-    redirect_to [:admin, @admin_user], notice: 'Teams were successfully updated.'
+  def projects
+    @personal_projects = user.personal_projects
+    @joined_projects = user.projects.joined(@user)
   end
 
+  def keys
+    @keys = user.keys.order_id_desc
+  end
 
   def new
-    @admin_user = User.new(projects_limit: Gitlab.config.default_projects_limit)
+    @user = User.new
   end
 
   def edit
-    @admin_user = User.find(params[:id])
+    user
   end
 
-  def block 
-    @admin_user = User.find(params[:id])
+  def impersonate
+    if can?(user, :log_in)
+      session[:impersonator_id] = current_user.id
 
-    if @admin_user.block
-      redirect_to :back, alert: "Successfully blocked"
-    else 
-      redirect_to :back, alert: "Error occured. User was not blocked"
+      warden.set_user(user, scope: :user)
+
+      log_impersonation_event
+
+      flash[:alert] = _("You are now impersonating %{username}") % { username: user.username }
+
+      redirect_to root_path
+    else
+      flash[:alert] =
+        if user.blocked?
+          _("You cannot impersonate a blocked user")
+        elsif user.internal?
+          _("You cannot impersonate an internal user")
+        else
+          _("You cannot impersonate a user who cannot log in")
+        end
+
+      redirect_to admin_user_path(user)
     end
   end
 
-  def unblock 
-    @admin_user = User.find(params[:id])
+  def activate
+    return redirect_back_or_admin_user(notice: _("Error occurred. A blocked user must be unblocked to be activated")) if user.blocked?
 
-    if @admin_user.update_attribute(:blocked, false)
-      redirect_to :back, alert: "Successfully unblocked"
-    else 
-      redirect_to :back, alert: "Error occured. User was not unblocked"
+    user.activate
+    redirect_back_or_admin_user(notice: _("Successfully activated"))
+  end
+
+  def deactivate
+    return redirect_back_or_admin_user(notice: _("Error occurred. A blocked user cannot be deactivated")) if user.blocked?
+    return redirect_back_or_admin_user(notice: _("Successfully deactivated")) if user.deactivated?
+    return redirect_back_or_admin_user(notice: _("The user you are trying to deactivate has been active in the past %{minimum_inactive_days} days and cannot be deactivated") % { minimum_inactive_days: ::User::MINIMUM_INACTIVE_DAYS }) unless user.can_be_deactivated?
+
+    user.deactivate
+    redirect_back_or_admin_user(notice: _("Successfully deactivated"))
+  end
+
+  def block
+    result = Users::BlockService.new(current_user).execute(user)
+
+    if result[:status] = :success
+      redirect_back_or_admin_user(notice: _("Successfully blocked"))
+    else
+      redirect_back_or_admin_user(alert: _("Error occurred. User was not blocked"))
     end
+  end
+
+  def unblock
+    if user.ldap_blocked?
+      redirect_back_or_admin_user(alert: _("This user cannot be unlocked manually from GitLab"))
+    elsif update_user { |user| user.activate }
+      redirect_back_or_admin_user(notice: _("Successfully unblocked"))
+    else
+      redirect_back_or_admin_user(alert: _("Error occurred. User was not unblocked"))
+    end
+  end
+
+  def unlock
+    if update_user { |user| user.unlock_access! }
+      redirect_back_or_admin_user(alert: _("Successfully unlocked"))
+    else
+      redirect_back_or_admin_user(alert: _("Error occurred. User was not unlocked"))
+    end
+  end
+
+  def confirm
+    if update_user { |user| user.confirm }
+      redirect_back_or_admin_user(notice: _("Successfully confirmed"))
+    else
+      redirect_back_or_admin_user(alert: _("Error occurred. User was not confirmed"))
+    end
+  end
+
+  def disable_two_factor
+    update_user { |user| user.disable_two_factor! }
+
+    redirect_to admin_user_path(user),
+      notice: _('Two-factor Authentication has been disabled for this user')
   end
 
   def create
-    admin = params[:user].delete("admin")
+    opts = {
+      reset_password: true,
+      skip_confirmation: true
+    }
 
-    @admin_user = User.new(params[:user])
-    @admin_user.admin = (admin && admin.to_i > 0)
+    @user = Users::CreateService.new(current_user, user_params.merge(opts)).execute
 
     respond_to do |format|
-      if @admin_user.save
-        format.html { redirect_to [:admin, @admin_user], notice: 'User was successfully created.' }
-        format.json { render json: @admin_user, status: :created, location: @admin_user }
+      if @user.persisted?
+        format.html { redirect_to [:admin, @user], notice: _('User was successfully created.') }
+        format.json { render json: @user, status: :created, location: @user }
       else
-        format.html { render action: "new" }
-        format.json { render json: @admin_user.errors, status: :unprocessable_entity }
+        format.html { render "new" }
+        format.json { render json: @user.errors, status: :unprocessable_entity }
       end
     end
   end
 
   def update
-    admin = params[:user].delete("admin")
+    user_params_with_pass = user_params.dup
 
-    if params[:user][:password].blank?
-      params[:user].delete(:password)
-      params[:user].delete(:password_confirmation)
+    if params[:user][:password].present?
+      password_params = {
+        password: params[:user][:password],
+        password_confirmation: params[:user][:password_confirmation]
+      }
+
+      password_params[:password_expires_at] = Time.now unless changing_own_password?
+
+      user_params_with_pass.merge!(password_params)
     end
 
-    @admin_user = User.find(params[:id])
-    @admin_user.admin = (admin && admin.to_i > 0)
-
     respond_to do |format|
-      if @admin_user.update_attributes(params[:user])
-        format.html { redirect_to [:admin, @admin_user], notice: 'User was successfully updated.' }
+      result = Users::UpdateService.new(current_user, user_params_with_pass.merge(user: user)).execute do |user|
+        user.skip_reconfirmation!
+      end
+
+      if result[:status] == :success
+        format.html { redirect_to [:admin, user], notice: _('User was successfully updated.') }
         format.json { head :ok }
       else
-        format.html { render action: "edit" }
-        format.json { render json: @admin_user.errors, status: :unprocessable_entity }
+        # restore username to keep form action url.
+        user.username = params[:id]
+        format.html { render "edit" }
+        format.json { render json: [result[:message]], status: result[:status] }
       end
     end
   end
 
   def destroy
-    @admin_user = User.find(params[:id])
-    @admin_user.destroy
+    user.delete_async(deleted_by: current_user, params: params.permit(:hard_delete))
 
     respond_to do |format|
-      format.html { redirect_to admin_users_url }
+      format.html { redirect_to admin_users_path, status: :found, notice: _("The user is being deleted.") }
       format.json { head :ok }
     end
   end
+
+  def remove_email
+    email = user.emails.find(params[:email_id])
+    success = Emails::DestroyService.new(current_user, user: user).execute(email)
+
+    respond_to do |format|
+      if success
+        format.html { redirect_back_or_admin_user(notice: _('Successfully removed email.')) }
+        format.json { head :ok }
+      else
+        format.html { redirect_back_or_admin_user(alert: _('There was an error removing the e-mail.')) }
+        format.json { render json: _('There was an error removing the e-mail.'), status: :bad_request }
+      end
+    end
+  end
+
+  protected
+
+  def changing_own_password?
+    user == current_user
+  end
+
+  def user
+    @user ||= find_routable!(User, params[:id])
+  end
+
+  def build_canonical_path(user)
+    url_for(safe_params.merge(id: user.to_param))
+  end
+
+  def redirect_back_or_admin_user(options = {})
+    redirect_back_or_default(default: default_route, options: options)
+  end
+
+  def default_route
+    [:admin, @user]
+  end
+
+  def user_params
+    params.require(:user).permit(allowed_user_params)
+  end
+
+  def allowed_user_params
+    [
+      :access_level,
+      :avatar,
+      :bio,
+      :can_create_group,
+      :color_scheme_id,
+      :email,
+      :extern_uid,
+      :external,
+      :force_random_password,
+      :hide_no_password,
+      :hide_no_ssh_key,
+      :key_id,
+      :linkedin,
+      :name,
+      :password_expires_at,
+      :projects_limit,
+      :provider,
+      :remember_me,
+      :skype,
+      :theme_id,
+      :twitter,
+      :username,
+      :website_url
+    ]
+  end
+
+  def update_user(&block)
+    result = Users::UpdateService.new(current_user, user: user).execute(&block)
+
+    result[:status] == :success
+  end
+
+  def check_impersonation_availability
+    access_denied! unless Gitlab.config.gitlab.impersonation_enabled
+  end
+
+  def log_impersonation_event
+    Gitlab::AppLogger.info(_("User %{current_user_username} has started impersonating %{username}") % { current_user_username: current_user.username, username: user.username })
+  end
 end
+
+Admin::UsersController.prepend_if_ee('EE::Admin::UsersController')

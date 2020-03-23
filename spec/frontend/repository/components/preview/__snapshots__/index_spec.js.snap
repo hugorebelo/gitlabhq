@@ -1,0 +1,41 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`Repository file preview component renders file HTML 1`] = `
+<article
+  class="file-holder limited-width-container readme-holder"
+>
+  <div
+    class="js-file-title file-title-flex-parent"
+  >
+    <div
+      class="file-header-content"
+    >
+      <i
+        aria-hidden="true"
+        class="fa fa-file-text-o fa-fw"
+      />
+       
+      <gl-link-stub
+        href="http://test.com"
+      >
+        <strong>
+          README.md
+        </strong>
+      </gl-link-stub>
+    </div>
+  </div>
+   
+  <div
+    class="blob-viewer"
+    data-qa-selector="blob_viewer_content"
+  >
+    <div>
+      <div
+        class="blob"
+      >
+        test
+      </div>
+    </div>
+  </div>
+</article>
+`;

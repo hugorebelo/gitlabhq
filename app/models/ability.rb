@@ -1,82 +1,91 @@
+# frozen_string_literal: true
+
+require_dependency 'declarative_policy'
+
 class Ability
-  def self.allowed(object, subject)
-    case subject.class.name
-    when "Project" then project_abilities(object, subject)
-    when "Issue" then issue_abilities(object, subject)
-    when "Note" then note_abilities(object, subject)
-    when "Snippet" then snippet_abilities(object, subject)
-    when "MergeRequest" then merge_request_abilities(object, subject)
-    else []
-    end
-  end
-
-  def self.project_abilities(user, project)
-    rules = []
-
-    rules << [
-      :read_project,
-      :read_wiki,
-      :read_issue,
-      :read_milestone,
-      :read_snippet,
-      :read_team_member,
-      :read_merge_request,
-      :read_note,
-      :write_project,
-      :write_issue,
-      :write_note
-    ] if project.guest_access_for?(user)
-
-    rules << [
-      :download_code,
-      :write_merge_request,
-      :write_snippet
-    ] if project.report_access_for?(user)
-
-    rules << [
-      :write_wiki
-    ] if project.dev_access_for?(user)
-
-    rules << [
-      :modify_issue,
-      :modify_snippet,
-      :modify_merge_request,
-      :admin_project,
-      :admin_issue,
-      :admin_milestone,
-      :admin_snippet,
-      :admin_team_member,
-      :admin_merge_request,
-      :admin_note,
-      :accept_mr,
-      :admin_wiki
-    ] if project.master_access_for?(user) || project.owner == user
-
-
-    rules.flatten
-  end
-
   class << self
-    [:issue, :note, :snippet, :merge_request].each do |name|
-      define_method "#{name}_abilities" do |user, subject|
-        if subject.author == user
-          [
-            :"read_#{name}",
-            :"write_#{name}",
-            :"modify_#{name}",
-            :"admin_#{name}"
-          ]
-        elsif subject.respond_to?(:assignee) && subject.assignee == user
-          [
-            :"read_#{name}",
-            :"write_#{name}",
-            :"modify_#{name}",
-          ]
-        else
-          subject.respond_to?(:project) ?
-            project_abilities(user, subject.project) : []
-        end
+    # Given a list of users and a project this method returns the users that can
+    # read the given project.
+    def users_that_can_read_project(users, project)
+      DeclarativePolicy.subject_scope do
+        users.select { |u| allowed?(u, :read_project, project) }
       end
+    end
+
+    # Given a list of users and a group this method returns the users that can
+    # read the given group.
+    def users_that_can_read_group(users, group)
+      DeclarativePolicy.subject_scope do
+        users.select { |u| allowed?(u, :read_group, group) }
+      end
+    end
+
+    # Given a list of users and a snippet this method returns the users that can
+    # read the given snippet.
+    def users_that_can_read_personal_snippet(users, snippet)
+      DeclarativePolicy.subject_scope do
+        users.select { |u| allowed?(u, :read_snippet, snippet) }
+      end
+    end
+
+    # Returns an Array of Issues that can be read by the given user.
+    #
+    # issues - The issues to reduce down to those readable by the user.
+    # user - The User for which to check the issues
+    # filters - A hash of abilities and filters to apply if the user lacks this
+    #           ability
+    def issues_readable_by_user(issues, user = nil, filters: {})
+      issues = apply_filters_if_needed(issues, user, filters)
+
+      DeclarativePolicy.user_scope do
+        issues.select { |issue| issue.visible_to_user?(user) }
+      end
+    end
+
+    # Returns an Array of MergeRequests that can be read by the given user.
+    #
+    # merge_requests - MRs out of which to collect MRs readable by the user.
+    # user - The User for which to check the merge_requests
+    # filters - A hash of abilities and filters to apply if the user lacks this
+    #           ability
+    def merge_requests_readable_by_user(merge_requests, user = nil, filters: {})
+      merge_requests = apply_filters_if_needed(merge_requests, user, filters)
+
+      DeclarativePolicy.user_scope do
+        merge_requests.select { |mr| allowed?(user, :read_merge_request, mr) }
+      end
+    end
+
+    def allowed?(user, action, subject = :global, opts = {})
+      if subject.is_a?(Hash)
+        opts, subject = subject, :global
+      end
+
+      policy = policy_for(user, subject)
+
+      case opts[:scope]
+      when :user
+        DeclarativePolicy.user_scope { policy.can?(action) }
+      when :subject
+        DeclarativePolicy.subject_scope { policy.can?(action) }
+      else
+        policy.can?(action)
+      end
+    end
+
+    def policy_for(user, subject = :global)
+      cache = Gitlab::SafeRequestStore.active? ? Gitlab::SafeRequestStore : {}
+      DeclarativePolicy.policy_for(user, subject, cache: cache)
+    end
+
+    private
+
+    def apply_filters_if_needed(elements, user, filters)
+      filters.each do |ability, filter|
+        elements = filter.call(elements) unless allowed?(user, ability)
+      end
+
+      elements
     end
   end
 end

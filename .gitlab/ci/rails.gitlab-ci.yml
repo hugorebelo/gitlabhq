@@ -1,0 +1,452 @@
+.rails:needs:setup-and-assets:
+  needs:
+    - job: setup-test-env
+      artifacts: true
+    - job: compile-assets pull-cache
+      artifacts: true
+
+.rails-job-base:
+  extends:
+    - .default-retry
+    - .default-cache
+    - .default-before_script
+
+####################
+# ee and foss jobs #
+setup-test-env:
+  extends:
+    - .rails-job-base
+    - .rails:rules:default-refs-code-backstage-qa
+    - .use-pg9
+  stage: prepare
+  script:
+    - bundle exec ruby -Ispec -e 'require "spec_helper" ; TestEnv.init'
+    - scripts/gitaly-test-build  # Do not use 'bundle exec' here
+  artifacts:
+    expire_in: 7d
+    paths:
+      - tmp/tests
+      - config/secrets.yml
+      - vendor/gitaly-ruby
+  cache:
+    policy: pull-push
+
+static-analysis:
+  extends:
+    - .rails-job-base
+    - .rails:rules:default-refs-code-backstage-qa
+    - .rails:needs:setup-and-assets
+  stage: test
+  variables:
+    SETUP_DB: "false"
+  parallel: 2
+  script:
+    - scripts/static-analysis
+  cache:
+    key: "debian-stretch-ruby-2.6-pg9.6-rubocop"
+    paths:
+      - vendor/ruby
+      - tmp/rubocop_cache
+    policy: pull-push
+
+downtime_check:
+  extends:
+    - .rails-job-base
+    - .rails:needs:setup-and-assets
+    - .rails:rules:downtime_check
+  stage: test
+  variables:
+    SETUP_DB: "false"
+  script:
+    - bundle exec rake downtime_check
+
+.rspec-base:
+  extends: .rails-job-base
+  stage: test
+  needs:
+    - job: setup-test-env
+      artifacts: true
+    - job: retrieve-tests-metadata
+      artifacts: true
+    - job: compile-assets pull-cache
+      artifacts: true
+  script:
+    - source scripts/rspec_helpers.sh
+    - rspec_paralellized_job "--tag ~quarantine --tag ~geo --tag ~level:migration"
+  artifacts:
+    expire_in: 31d
+    when: always
+    paths:
+      - coverage/
+      - knapsack/
+      - rspec_flaky/
+      - rspec_profiling/
+      - tmp/capybara/
+      - tmp/memory_test/
+      - junit_rspec.xml
+    reports:
+      junit: junit_rspec.xml
+
+.rspec-base-quarantine:
+  extends:
+    - .rspec-base
+    - .use-pg9
+  variables:
+    RSPEC_OPTS: "--tag quarantine -- spec/"
+  script:
+    - source scripts/rspec_helpers.sh
+    - rspec_simple_job "${RSPEC_OPTS}"
+  allow_failure: true
+
+.rspec-base-pg9:
+  extends:
+    - .rspec-base
+    - .rails:rules:ee-and-foss
+    - .use-pg9
+
+.rspec-base-migration:
+  script:
+    - source scripts/rspec_helpers.sh
+    - rspec_paralellized_job "--tag ~quarantine --tag ~geo --tag level:migration"
+
+rspec migration pg9:
+  extends:
+    - .rspec-base-pg9
+    - .rspec-base-migration
+  parallel: 5
+
+rspec unit pg9:
+  extends: .rspec-base-pg9
+  parallel: 20
+
+rspec integration pg9:
+  extends: .rspec-base-pg9
+  parallel: 8
+
+rspec system pg9:
+  extends: .rspec-base-pg9
+  parallel: 24
+
+rspec fast_spec_helper:
+  extends: .rspec-base-pg9
+  script:
+    - bin/rspec spec/fast_spec_helper.rb
+
+.db-job-base:
+  extends:
+    - .rails-job-base
+    - .rails:rules:ee-and-foss
+    - .use-pg9
+  stage: test
+  needs:
+    - job: setup-test-env
+      artifacts: true
+
+db:migrate:reset:
+  extends: .db-job-base
+  script:
+    - bundle exec rake db:migrate:reset
+
+db:check-schema:
+  extends: .db-job-base
+  script:
+    - source scripts/schema_changed.sh
+
+db:migrate-from-v11.11.0:
+  extends: .db-job-base
+  variables:
+    SETUP_DB: "false"
+  script:
+    - export PROJECT_TO_CHECKOUT="gitlab-foss"
+    - export TAG_TO_CHECKOUT="v11.11.0"
+    - '[[ ! -d "ee/" ]] || export PROJECT_TO_CHECKOUT="gitlab"'
+    - '[[ ! -d "ee/" ]] || export TAG_TO_CHECKOUT="v11.11.0-ee"'
+    - git fetch https://gitlab.com/gitlab-org/$PROJECT_TO_CHECKOUT.git $TAG_TO_CHECKOUT
+    - git checkout -f FETCH_HEAD
+    - sed -i "s/gem 'oj', '~> 2.17.4'//" Gemfile
+    - sed -i "s/gem 'bootsnap', '~> 1.0.0'/gem 'bootsnap'/" Gemfile
+    - bundle update google-protobuf grpc bootsnap
+    - bundle install $BUNDLE_INSTALL_FLAGS
+    - date
+    - cp config/gitlab.yml.example config/gitlab.yml
+    - bundle exec rake db:drop db:create db:schema:load db:seed_fu
+    - date
+    - git checkout -f $CI_COMMIT_SHA
+    - bundle install $BUNDLE_INSTALL_FLAGS
+    - date
+    - . scripts/prepare_build.sh
+    - date
+    - bundle exec rake db:migrate
+
+db:rollback:
+  extends: .db-job-base
+  script:
+    - bundle exec rake db:migrate VERSION=20180101160629
+    - bundle exec rake db:migrate SKIP_SCHEMA_VERSION_CHECK=true
+
+gitlab:setup:
+  extends: .db-job-base
+  variables:
+    SETUP_DB: "false"
+  script:
+    # Manually clone gitlab-test and only seed this project in
+    # db/fixtures/development/04_project.rb thanks to SIZE=1 below
+    - git clone https://gitlab.com/gitlab-org/gitlab-test.git
+       /home/git/repositories/gitlab-org/gitlab-test.git
+    - scripts/gitaly-test-spawn
+    - force=yes SIZE=1 FIXTURE_PATH="db/fixtures/development" bundle exec rake gitlab:setup
+  artifacts:
+    when: on_failure
+    expire_in: 1d
+    paths:
+      - log/development.log
+
+rspec:coverage:
+  extends:
+    - .rails-job-base
+    - .rails:rules:ee-only
+  stage: post-test
+  # We cannot use needs since it would mean needing 84 jobs (since most are parallelized)
+  # so we use `dependencies` here.
+  dependencies:
+    - setup-test-env
+    - rspec migration pg9
+    - rspec unit pg9
+    - rspec integration pg9
+    - rspec system pg9
+    - rspec-ee migration pg9
+    - rspec-ee unit pg9
+    - rspec-ee integration pg9
+    - rspec-ee system pg9
+    - rspec-ee unit pg9 geo
+    - rspec-ee integration pg9 geo
+    - rspec-ee system pg9 geo
+    - memory-static
+    - memory-on-boot
+  variables:
+    SETUP_DB: "false"
+  cache:
+    policy: pull
+  script:
+    - bundle exec scripts/merge-simplecov
+    - bundle exec scripts/gather-test-memory-data
+  coverage: '/LOC \((\d+\.\d+%)\) covered.$/'
+  artifacts:
+    name: coverage
+    expire_in: 31d
+    paths:
+      - coverage/index.html
+      - coverage/assets/
+      - tmp/memory_test/
+# ee and foss jobs #
+####################
+
+####################
+# master-only jobs #
+rspec quarantine pg9:
+  extends:
+    - .rspec-base-quarantine
+    - .rails:rules:master-refs-code-backstage
+
+.rspec-base-pg10:
+  extends:
+    - .rspec-base
+    - .rails:rules:master-refs-code-backstage
+    - .use-pg10
+
+rspec migration pg10:
+  extends:
+    - .rspec-base-pg10
+    - .rspec-base-migration
+  parallel: 2
+
+rspec unit pg10:
+  extends: .rspec-base-pg10
+  parallel: 20
+
+rspec integration pg10:
+  extends: .rspec-base-pg10
+  parallel: 8
+
+rspec system pg10:
+  extends: .rspec-base-pg10
+  parallel: 24
+# master-only jobs #
+####################
+
+############################
+# nightly master-only jobs #
+.rspec-base-pg11:
+  extends:
+    - .rspec-base
+    - .rails:rules:nightly-master-refs-code-backstage
+    - .use-pg11
+
+rspec migration pg11:
+  extends:
+    - .rspec-base-pg11
+    - .rspec-base-migration
+  parallel: 2
+
+rspec unit pg11:
+  extends: .rspec-base-pg11
+  parallel: 20
+
+rspec integration pg11:
+  extends: .rspec-base-pg11
+  parallel: 8
+
+rspec system pg11:
+  extends: .rspec-base-pg11
+  parallel: 24
+# nightly master-only jobs #
+############################
+
+#########################
+# ee + master-only jobs #
+rspec-ee quarantine pg9:
+  extends:
+    - .rspec-base-quarantine
+    - .rails:rules:master-refs-code-backstage-ee-only
+  variables:
+    RSPEC_OPTS: "--tag quarantine -- ee/spec/"
+
+rspec-ee migration pg10:
+  extends:
+    - .rspec-ee-base-pg10
+    - .rspec-base-migration
+    - .rails:rules:master-refs-code-backstage
+  parallel: 2
+
+rspec-ee unit pg10:
+  extends:
+    - .rspec-ee-base-pg10
+    - .rails:rules:master-refs-code-backstage
+  parallel: 10
+
+rspec-ee integration pg10:
+  extends:
+    - .rspec-ee-base-pg10
+    - .rails:rules:master-refs-code-backstage
+  parallel: 4
+
+rspec-ee system pg10:
+  extends:
+    - .rspec-ee-base-pg10
+    - .rails:rules:master-refs-code-backstage
+  parallel: 6
+# ee + master-only jobs #
+#########################
+
+#################
+# ee-only jobs #
+.rspec-base-ee:
+  extends:
+    - .rspec-base
+    - .rails:rules:ee-only
+
+.rspec-base-pg9-as-if-foss:
+  extends:
+    - .rspec-base-ee
+    - .as-if-foss
+    - .use-pg9
+  needs:
+    - job: setup-test-env
+      artifacts: true
+    - job: retrieve-tests-metadata
+      artifacts: true
+    - job: compile-assets pull-cache as-if-foss
+      artifacts: true
+
+.rspec-ee-base-pg9:
+  extends:
+    - .rspec-base-ee
+    - .use-pg9-ee
+
+.rspec-ee-base-pg10:
+  extends:
+    - .rspec-base-ee
+    - .use-pg10-ee
+
+rspec migration pg9-as-if-foss:
+  extends:
+    - .rspec-base-pg9-as-if-foss
+    - .rspec-base-migration
+  parallel: 5
+
+rspec unit pg9-as-if-foss:
+  extends: .rspec-base-pg9-as-if-foss
+  parallel: 20
+
+rspec integration pg9-as-if-foss:
+  extends: .rspec-base-pg9-as-if-foss
+  parallel: 8
+
+rspec system pg9-as-if-foss:
+  extends: .rspec-base-pg9-as-if-foss
+  parallel: 24
+
+rspec-ee migration pg9:
+  extends:
+    - .rspec-ee-base-pg9
+    - .rspec-base-migration
+  parallel: 2
+
+rspec-ee unit pg9:
+  extends: .rspec-ee-base-pg9
+  parallel: 10
+
+rspec-ee integration pg9:
+  extends: .rspec-ee-base-pg9
+  parallel: 4
+
+rspec-ee system pg9:
+  extends: .rspec-ee-base-pg9
+  parallel: 6
+
+.rspec-ee-base-geo:
+  extends: .rspec-base-ee
+  script:
+    - source scripts/rspec_helpers.sh
+    - scripts/prepare_postgres_fdw.sh
+    - rspec_paralellized_job "--tag ~quarantine --tag geo"
+
+.rspec-ee-base-geo-pg9:
+  extends:
+    - .rspec-ee-base-geo
+    - .use-pg9-ee
+
+.rspec-ee-base-geo-pg10:
+  extends:
+    - .rspec-ee-base-geo
+    - .use-pg10-ee
+
+rspec-ee unit pg9 geo:
+  extends: .rspec-ee-base-geo-pg9
+  parallel: 2
+
+rspec-ee integration pg9 geo:
+  extends: .rspec-ee-base-geo-pg9
+
+rspec-ee system pg9 geo:
+  extends: .rspec-ee-base-geo-pg9
+
+rspec-ee unit pg10 geo:
+  extends: .rspec-ee-base-geo-pg10
+  parallel: 2
+
+rspec-ee integration pg10 geo:
+  extends: .rspec-ee-base-geo-pg10
+
+rspec-ee system pg10 geo:
+  extends: .rspec-ee-base-geo-pg10
+
+db:rollback geo:
+  extends:
+    - db:rollback
+    - .rails:rules:ee-only
+  script:
+    - bundle exec rake geo:db:migrate VERSION=20170627195211
+    - bundle exec rake geo:db:migrate
+# ee-only jobs #
+################

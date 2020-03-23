@@ -1,0 +1,27 @@
+- if @domain.errors.any?
+  .alert.alert-danger
+    - @domain.errors.full_messages.each do |msg|
+      = msg
+
+.form-group.border-section
+  .row
+    - if @domain.persisted?
+      .col-sm-2
+        = _("Domain")
+      .col-sm-10
+        = external_link(@domain.url, @domain.url)
+    - else
+      .col-sm-2
+        = f.label :domain, _("Domain")
+      .col-sm-10
+        .input-group
+          = f.text_field :domain, required: true, autocomplete: "off", class: "form-control"
+
+- if @domain.persisted?
+  = render 'dns'
+
+- if Gitlab.config.pages.external_https
+  = render 'certificate', f: f
+- else
+  .border-section.nothing-here-block
+    = _("Support for custom certificates is disabled. Ask your system's administrator to enable it.")

@@ -1,0 +1,382 @@
+inherit_gem:
+  gitlab-styles:
+    - rubocop-default.yml
+
+inherit_from: .rubocop_todo.yml
+require:
+  - ./rubocop/rubocop
+  - rubocop-rspec
+
+AllCops:
+  TargetRubyVersion: 2.6
+  TargetRailsVersion: 5.0
+  Exclude:
+    - 'vendor/**/*'
+    - 'node_modules/**/*'
+    - 'db/fixtures/**/*'
+    - 'db/schema.rb'
+    - 'ee/db/geo/schema.rb'
+    - 'tmp/**/*'
+    - 'bin/**/*'
+    - 'generator_templates/**/*'
+    - 'builds/**/*'
+    - 'plugins/**/*'
+  CacheRootDirectory: tmp
+
+# This cop checks whether some constant value isn't a
+# mutable literal (e.g. array or hash).
+Style/MutableConstant:
+  Enabled: true
+  Exclude:
+    - 'db/migrate/**/*'
+    - 'db/post_migrate/**/*'
+    - 'ee/db/migrate/**/*'
+    - 'ee/db/post_migrate/**/*'
+    - 'ee/db/geo/migrate/**/*'
+
+# TODO: Move this to gitlab-styles
+Style/SafeNavigation:
+  Enabled: false
+
+# Frozen String Literal
+Style/FrozenStringLiteralComment:
+  Enabled: true
+  Exclude:
+    - 'config.ru'
+    - 'Dangerfile'
+    - 'Gemfile'
+    - 'Rakefile'
+    - 'app/views/**/*'
+    - 'config/**/*'
+    - 'danger/**/*'
+    - 'db/**/*'
+    - 'ee/db/**/*'
+    - 'ee/lib/tasks/**/*'
+    - 'lib/tasks/**/*'
+    - 'qa/**/*'
+    - 'rubocop/**/*'
+    - 'scripts/**/*'
+
+RSpec/FilePath:
+  Exclude:
+    - 'qa/**/*'
+    - 'spec/frontend/fixtures/*'
+    - 'ee/spec/frontend/fixtures/*'
+    - 'spec/requests/api/v3/*'
+
+Naming/FileName:
+  ExpectMatchingDefinition: true
+  Exclude:
+    - 'db/**/*'
+    - 'ee/db/**/*'
+    - 'spec/**/*'
+    - 'features/**/*'
+    - 'ee/spec/**/*'
+    - 'qa/spec/**/*'
+    - 'qa/qa/specs/**/*'
+    - 'qa/bin/*'
+    - 'ee/bin/*'
+    - 'config/**/*'
+    - 'ee/config/**/*'
+    - 'lib/generators/**/*'
+    - 'locale/unfound_translations.rb'
+    - 'ee/locale/unfound_translations.rb'
+    - 'ee/lib/generators/**/*'
+    - 'qa/qa/scenario/test/integration/ldap_no_tls.rb'
+    - 'qa/qa/scenario/test/integration/ldap_tls.rb'
+
+  IgnoreExecutableScripts: true
+  AllowedAcronyms:
+    - EE
+    - JSON
+    - LDAP
+    - SAML
+    - SSO
+    - IO
+    - HMAC
+    - QA
+    - ENV
+    - STL
+    - PDF
+    - SVG
+    - CTE
+    - DN
+    - RSA
+    - CI
+    - CD
+    - OAuth
+    # default ones:
+    - CLI
+    - DSL
+    - ACL
+    - API
+    - ASCII
+    - CPU
+    - CSS
+    - DNS
+    - EOF
+    - GUID
+    - HTML
+    - HTTP
+    - HTTPS
+    - ID
+    - IP
+    - JSON
+    - LHS
+    - QPS
+    - RAM
+    - RHS
+    - RPC
+    - SLA
+    - SMTP
+    - SQL
+    - SSH
+    - TCP
+    - TLS
+    - TTL
+    - UDP
+    - UI
+    - UID
+    - UUID
+    - URI
+    - URL
+    - UTF8
+    - VM
+    - XML
+    - XMPP
+    - XSRF
+    - XSS
+    - GRPC
+
+Rails/ApplicationRecord:
+  Enabled: true
+  Exclude:
+    # Models in database migrations should not subclass from ApplicationRecord
+    # as they need to be as decoupled from application code as possible
+    - db/**/*.rb
+    - lib/gitlab/background_migration/**/*.rb
+    - ee/lib/ee/gitlab/background_migration/**/*.rb
+    - lib/gitlab/database/**/*.rb
+    - spec/**/*.rb
+    - ee/db/**/*.rb
+    - ee/spec/**/*.rb
+
+# GitLab ###################################################################
+
+Gitlab/ModuleWithInstanceVariables:
+  Enable: true
+  Exclude:
+    # We ignore Rails helpers right now because it's hard to workaround it
+    - app/helpers/**/*_helper.rb
+    - ee/app/helpers/**/*_helper.rb
+    # We ignore Rails mailers right now because it's hard to workaround it
+    - app/mailers/emails/**/*.rb
+    - ee/**/emails/**/*.rb
+    # We ignore spec helpers because it usually doesn't matter
+    - spec/support/**/*.rb
+    - features/steps/**/*.rb
+
+Gitlab/ConstGetInheritFalse:
+  Enabled: true
+  Exclude:
+    - 'qa/bin/*'
+
+Gitlab/HTTParty:
+  Enabled: true
+  Exclude:
+    - 'spec/**/*'
+    - 'ee/spec/**/*'
+
+GitlabSecurity/PublicSend:
+  Enabled: true
+  Exclude:
+    - 'config/**/*'
+    - 'db/**/*'
+    - 'features/**/*'
+    - 'lib/**/*.rake'
+    - 'qa/**/*'
+    - 'spec/**/*'
+    - 'ee/db/**/*'
+    - 'ee/lib/**/*.rake'
+    - 'ee/spec/**/*'
+
+Gitlab/DuplicateSpecLocation:
+  Exclude:
+    - ee/spec/controllers/groups_controller_spec.rb
+    - ee/spec/controllers/projects/jobs_controller_spec.rb
+    - ee/spec/helpers/auth_helper_spec.rb
+    - ee/spec/lib/gitlab/gl_repository_spec.rb
+    - ee/spec/lib/gitlab/usage_data_spec.rb
+    - ee/spec/models/namespace_spec.rb
+    - ee/spec/models/note_spec.rb
+    - ee/spec/serializers/environment_entity_spec.rb
+    - ee/spec/services/issues/create_service_spec.rb
+    - ee/spec/services/merge_requests/create_service_spec.rb
+    - ee/spec/services/merge_requests/refresh_service_spec.rb
+    - ee/spec/services/merge_requests/update_service_spec.rb
+    - ee/spec/services/system_hooks_service_spec.rb
+    - ee/spec/controllers/ee/groups_controller_spec.rb
+    - ee/spec/controllers/ee/projects/jobs_controller_spec.rb
+    - ee/spec/helpers/ee/auth_helper_spec.rb
+    - ee/spec/lib/ee/gitlab/gl_repository_spec.rb
+    - ee/spec/lib/ee/gitlab/usage_data_spec.rb
+    - ee/spec/models/ee/namespace_spec.rb
+    - ee/spec/models/ee/note_spec.rb
+    - ee/spec/serializers/ee/environment_entity_spec.rb
+    - ee/spec/services/ee/issues/create_service_spec.rb
+    - ee/spec/services/ee/merge_requests/create_service_spec.rb
+    - ee/spec/services/ee/merge_requests/refresh_service_spec.rb
+    - ee/spec/services/ee/merge_requests/update_service_spec.rb
+    - ee/spec/services/ee/system_hooks_service_spec.rb
+
+Cop/InjectEnterpriseEditionModule:
+  Enabled: true
+  Exclude:
+    - 'spec/**/*'
+    - 'ee/spec/**/*'
+
+Style/ReturnNil:
+  Enabled: true
+
+# It isn't always safe to replace `=~` with `.match?`, especially when there are
+# nil values on the left hand side
+Performance/RegexpMatch:
+  Enabled: false
+
+ActiveRecordAssociationReload:
+  Enabled: true
+  Exclude:
+    - 'spec/**/*'
+    - 'ee/spec/**/*'
+
+Naming/PredicateName:
+  Enabled: true
+  Exclude:
+    - 'spec/**/*'
+    - 'ee/spec/**/*'
+
+RSpec/FactoriesInMigrationSpecs:
+  Enabled: true
+  Include:
+    - 'spec/migrations/**/*.rb'
+    - 'ee/spec/migrations/**/*.rb'
+    - 'spec/lib/gitlab/background_migration/**/*.rb'
+    - 'spec/lib/ee/gitlab/background_migration/**/*.rb'
+    - 'ee/spec/lib/ee/gitlab/background_migration/**/*.rb'
+
+Cop/IncludeSidekiqWorker:
+  Enabled: true
+  Exclude:
+    - 'spec/**/*'
+    - 'ee/spec/**/*'
+
+Gitlab/Union:
+  Enabled: true
+  Exclude:
+    - 'spec/**/*'
+    - 'ee/spec/**/*'
+
+Cop/SidekiqOptionsQueue:
+  Enabled: true
+  Exclude:
+    - 'spec/**/*.rb'
+    - 'ee/spec/**/*.rb'
+
+Graphql/AuthorizeTypes:
+  Enabled: true
+  Exclude:
+    - 'spec/**/*.rb'
+    - 'ee/spec/**/*.rb'
+
+RSpec/EnvAssignment:
+  Enable: true
+  Include:
+    - 'spec/**/*.rb'
+    - 'ee/spec/**/*.rb'
+  Exclude:
+    - 'spec/**/fast_spec_helper.rb'
+    - 'ee/spec/**/fast_spec_helper.rb'
+    - 'spec/**/spec_helper.rb'
+    - 'ee/spec/**/spec_helper.rb'
+RSpec/BeSuccessMatcher:
+  Enabled: true
+  Include:
+    - 'spec/controllers/**/*'
+    - 'ee/spec/controllers/**/*'
+    - 'spec/support/shared_examples/controllers/**/*'
+    - 'ee/spec/support/shared_examples/controllers/**/*'
+    - 'spec/support/controllers/**/*'
+    - 'ee/spec/support/controllers/**/*'
+
+Scalability/FileUploads:
+  Enabled: true
+  Include:
+    - 'lib/api/**/*.rb'
+    - 'ee/lib/api/**/*.rb'
+
+Graphql/Descriptions:
+  Enabled: true
+  Include:
+    - 'app/graphql/**/*'
+    - 'ee/app/graphql/**/*'
+
+RSpec/AnyInstanceOf:
+  Enabled: false
+
+# Cops for upgrade to gitlab-styles 3.1.0
+RSpec/ImplicitSubject:
+  Enabled: false
+
+RSpec/LeakyConstantDeclaration:
+  Enabled: true
+  Exclude:
+    - 'spec/**/*.rb'
+    - 'ee/spec/**/*.rb'
+    - 'qa/spec/**/*.rb'
+
+RSpec/EmptyLineAfterHook:
+  Enabled: false
+
+RSpec/HooksBeforeExamples:
+  Enabled: false
+
+RSpec/EmptyLineAfterExample:
+  Enabled: false
+
+RSpec/Be:
+  Enabled: false
+
+RSpec/DescribedClass:
+  Enabled: false
+
+RSpec/SharedExamples:
+  Enabled: false
+
+RSpec/EmptyLineAfterExampleGroup:
+  Enabled: false
+
+RSpec/ReceiveNever:
+  Enabled: false
+
+RSpec/MissingExampleGroupArgument:
+  Enabled: false
+
+RSpec/UnspecifiedException:
+  Enabled: false
+
+RSpec/HaveGitlabHttpStatus:
+  Enabled: true
+  Exclude:
+    - 'spec/support/matchers/have_gitlab_http_status.rb'
+  Include:
+    - 'spec/**/*'
+    - 'ee/spec/**/*'
+
+Style/MultilineWhenThen:
+  Enabled: false
+
+Style/FloatDivision:
+  Enabled: false
+
+Cop/BanCatchThrow:
+  Enabled: true

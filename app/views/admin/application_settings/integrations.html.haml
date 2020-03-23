@@ -1,0 +1,12 @@
+- breadcrumb_title _("Integrations")
+- page_title _("Integrations")
+- @content_class = "limit-container-width" unless fluid_layout
+
+= render_if_exists 'admin/application_settings/elasticsearch_form'
+= render 'admin/application_settings/plantuml'
+= render 'admin/application_settings/sourcegraph'
+= render_if_exists 'admin/application_settings/slack'
+= render 'admin/application_settings/third_party_offers'
+= render 'admin/application_settings/snowplow'
+= render 'admin/application_settings/eks'
+

@@ -1,30 +1,67 @@
-/**
- * Tree slider for code browse
- *
- */
-var Tree = { 
-  init: 
-    function() { 
-      $('#tree-slider .tree-item-file-name a, .breadcrumb li > a').live("click", function() {
-        $("#tree-content-holder").hide("slide", { direction: "left" }, 150)
-      })
+/* eslint-disable func-names, consistent-return, one-var, no-else-return, class-methods-use-this */
 
-      $('.project-refs-form').live({
-        "ajax:beforeSend": function() { 
-          $("#tree-content-holder").hide("slide", { direction: "left" }, 150); 
+import $ from 'jquery';
+import { visitUrl } from './lib/utils/url_utility';
+
+export default class TreeView {
+  constructor() {
+    this.initKeyNav();
+    // Code browser tree slider
+    // Make the entire tree-item row clickable, but not if clicking another link (like a commit message)
+    $('.tree-content-holder .tree-item').on('click', function(e) {
+      const $clickedEl = $(e.target);
+      const path = $('.tree-item-file-name a', this).attr('href');
+      if (!$clickedEl.is('a') && !$clickedEl.is('.str-truncated')) {
+        if (e.metaKey || e.which === 2) {
+          e.preventDefault();
+          return window.open(path, '_blank');
+        } else {
+          return visitUrl(path);
         }
-      })
+      }
+    });
+    // Show the "Loading commit data" for only the first element
+    $('span.log_loading')
+      .first()
+      .removeClass('hide');
+  }
 
-      $("#tree-slider .tree-item").live('click', function(e){
-        if(e.target.nodeName != "A") {
-          link = $(this).find(".tree-item-file-name a");
-          link.trigger("click");
+  initKeyNav() {
+    const li = $('tr.tree-item');
+    let liSelected = null;
+    return $('body').keydown(e => {
+      let next, path;
+      if ($('input:focus').length > 0 && (e.which === 38 || e.which === 40)) {
+        return false;
+      }
+      if (e.which === 40) {
+        if (liSelected) {
+          next = liSelected.next();
+          if (next.length > 0) {
+            liSelected.removeClass('selected');
+            liSelected = next.addClass('selected');
+          }
+        } else {
+          liSelected = li.eq(0).addClass('selected');
         }
-      });
-
-      $('#tree-slider .tree-item-file-name a, .breadcrumb a, .project-refs-form').live({ 
-        "ajax:beforeSend": function() { $('.tree_progress').addClass("loading"); },
-        "ajax:complete": function() { $('.tree_progress').removeClass("loading"); } 
-      });
-    }
+        return $(liSelected).focus();
+      } else if (e.which === 38) {
+        if (liSelected) {
+          next = liSelected.prev();
+          if (next.length > 0) {
+            liSelected.removeClass('selected');
+            liSelected = next.addClass('selected');
+          }
+        } else {
+          liSelected = li.last().addClass('selected');
+        }
+        return $(liSelected).focus();
+      } else if (e.which === 13) {
+        path = $('.tree-item.selected .tree-item-file-name a').attr('href');
+        if (path) {
+          return visitUrl(path);
+        }
+      }
+    });
+  }
 }
